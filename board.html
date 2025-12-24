@@ -1,0 +1,54 @@
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Knewave&display=swap" rel="stylesheet">
+<script src="js/graphics.js"></script>
+<script src="js/game.js"></script>
+<script src="js/player.js"></script>
+<div id="board"></div>
+<script>
+    var board = document.getElementById('board');
+    var gw = 60;
+    var styles = {
+       background:"fillStyle:#000",
+       foreground:"fillStyle:#545454",
+    }
+    
+    var downloads = {
+       files:["characters","player","flowcheck","scenes"],
+       total:0
+    }
+    
+    for(var v in downloads.files){
+       loadFile(downloads.files[v]);
+    }
+
+    function loadFile(file){
+       var xhr = new XMLHttpRequest();
+       xhr.responseType = "json";
+       xhr.open("GET","data/"+file+".json");
+          xhr.onload = ()=>{
+             downloads.total++;
+             try{
+                 downloads[file] = xhr.response;
+             }catch(e){
+                 console.log("error",e)
+             }
+             //console.log(file,xhr.response)
+             if(downloads.total == downloads.files.length){
+                loadGame();
+             }
+             //downloads.downloads--;
+          };
+          xhr.onerror = (e)=>{
+             console.log("error: ",e,m);
+          }
+          xhr.onprogress = (e)=>{
+            //console.log(e.total,e.loaded,file);
+          }
+          xhr.send();
+    }
+    function loadGame(){
+       var p = new player(downloads.characters,downloads.player);
+       var g = new game(board,1500,1500,downloads.scenes,p);
+    }
+</script> 

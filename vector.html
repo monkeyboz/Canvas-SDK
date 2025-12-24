@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SVG Canvas Viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+body {
+    margin: 0;
+    background: #111;
+    color: #fff;
+    font-family: sans-serif;
+}
+#ui {
+    padding: 10px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+canvas {
+    display: block;
+    background: #000;
+    touch-action: none;
+}
+button {
+    padding: 6px 10px;
+}
+</style>
+</head>
+
+<body>
+
+<div id="ui">
+    <input type="file" id="upload" accept=".svg">
+    <button id="depthBtn">Depth Map</button>
+    <button id="resetBtn">Reset View</button>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+let img = new Image();
+let scale = 1, offsetX = 0, offsetY = 0;
+let dragging = false, lastX = 0, lastY = 0;
+let depthMode = false;
+let time = 0;
+
+const dpr = window.devicePixelRatio || 1;
+
+function resize(w, h) {
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+document.getElementById("upload").onchange = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+        // --- Basic path edit example (scale all paths slightly)
+        let svg = reader.result.replace(
+            /<path /g,
+            `<path transform="scale(1.02)" `
+        );
+
+        const blob = new Blob([svg], { type: "image/svg+xml" });
+        const url = URL.createObjectURL(blob);
+
+        img.onload = () => {
+            resize(img.width || 512, img.height || 512);
+            resetView();
+            requestAnimationFrame(draw);
+            URL.revokeObjectURL(url);
+        };
+        img.src = url;
+    };
+    reader.readAsText(file);
+};
+
+function resetView() {
+    scale = 1;
+    offsetX = offsetY = 0;
+}
+
+document.getElementById("resetBtn").onclick = resetView;
+document.getElementById("depthBtn").onclick = () => depthMode = !depthMode;
+
+canvas.onwheel = e => {
+    e.preventDefault();
+    scale *= e.deltaY < 0 ? 1.1 : 0.9;
+};
+
+canvas.onpointerdown = e => {
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+};
+
+canvas.onpointerup = () => dragging = false;
+canvas.onpointerleave = () => dragging = false;
+
+canvas.onpointermove = e => {
+    if (!dragging) return;
+    offsetX += e.clientX - lastX;
+    offsetY += e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+};
+
+function draw() {
+    time += 0.016;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+
+    // Pan / zoom
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
+
+    // Simple animation (breathing zoom)
+    const animScale = 1 + Math.sin(time) * 0.01;
+    ctx.scale(animScale, animScale);
+
+    ctx.drawImage(img, 0, 0);
+
+    if (depthMode) applyDepthMap();
+
+    ctx.restore();
+    requestAnimationFrame(draw);
+}
+
+function applyDepthMap() {
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = imgData.data;
+
+    for (let i = 0; i < d.length; i += 4) {
+        const depth = (d[i] + d[i+1] + d[i+2]) / 3;
+        d[i] = d[i+1] = d[i+2] = depth;
+    }
+    ctx.putImageData(imgData, 0, 0);
+}
+</script>
+
+</body>
+</html>

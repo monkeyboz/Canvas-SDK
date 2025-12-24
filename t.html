@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Image-based Shape-from-Shading Demo</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
+        .container { display: flex; gap: 50px; margin-top: 20px; }
+        .controls { display: flex; flex-direction: column; gap: 10px; padding: 20px; border: 1px solid #ddd; }
+        .output-box { border: 1px solid #4CAF50; padding: 10px; margin-top: 20px; }
+        .input-group { margin-bottom: 15px; padding: 10px; border: 1px solid #009688; border-radius: 5px; }
+        .input-group h3 { margin-top: 0; color: #009688; }
+        #image-area { text-align: center; }
+        #image-canvas { border: 1px solid #333; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <h1>Image-based Shape-from-Shading (SfS) Core Calculation</h1>
+    <p>Upload an image to extract pixel intensities for the Lambertian constraint: $I = \rho \cdot (N \cdot L)$.</p>
+
+    <div class="container">
+        <div class="panel">
+            <h2>1. Image Input</h2>
+            
+            <div class="input-group">
+                <h3>Input File</h3>
+                <label for="image-file">Select Shading Image:</label>
+                <input type="file" id="image-file" accept="image/*">
+            </div>
+
+            <div id="image-area">
+                <canvas id="image-canvas" width="200" height="200"></canvas>
+                <p>Status: <strong id="image-status">No image loaded.</strong></p>
+                <p>Image Pixel Count: <strong id="pixel-count">0</strong></p>
+            </div>
+        </div>
+
+        <div class="controls">
+            <h2>2. Known Values ($L$ and $\rho$)</h2>
+            
+            <div class="input-group">
+                <h3>Surface Albedo ($\rho$)</h3>
+                <label for="albedo">Albedo ($\rho$):</label>
+                <input type="number" id="albedo" value="1.0" step="0.1" readonly>
+            </div>
+            
+            <div class="input-group">
+                <h3>Light Direction ($L$)</h3>
+                <p>Adjust the known light vector $L = (L_x, L_y, L_z)$:</p>
+                
+                <label for="lx">Light X ($L_x$):</label>
+                <input type="range" id="lx" min="-1" max="1" step="0.1" value="0.5">
+                <span id="lx-val">0.5</span>
+
+                <label for="ly">Light Y ($L_y$):</label>
+                <input type="range" id="ly" min="-1" max="1" step="0.1" value="0.5">
+                <span id="ly-val">0.5</span>
+
+                <label for="lz">Light Z ($L_z$):</label>
+                <input type="range" id="lz" min="0" max="1" step="0.1" value="0.7">
+                <span id="lz-val">0.7</span>
+            </div>
+
+            <button onclick="calculateAllNormals()" disabled id="calculate-button">Calculate Normals for All Pixels</button>
+        </div>
+    </div>
+    
+    <div class="output-box">
+        <h2>3. Output Normal Map</h2>
+        <p>The canvas will be updated to show the estimated Normal Map based on the lighting and the image intensity. (R, G, B channels will map to $N_x, N_y, N_z$).</p>
+    </div>
+
+    <script src="t.js"></script>
+
+</body>
+</html>

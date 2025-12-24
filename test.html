@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>3×3 Pattern Analyzer + Gauss-Seidel Integrated Depth Map</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 20px; background: #f9f9f9; line-height: 1.6; }
+  canvas { max-width: 100%; border: 3px solid #3px solid #333; box-shadow: 0 6px 20px rgba(0,0,0,0.2); border-radius: 8px; }
+  button { padding: 12px 20px; font-size: 16px; background: #0066ff; color: white; border: none; border-radius: 6px; cursor: pointer; margin: 10px 5px; }
+  button:hover { background: #0055cc; }
+  #controls { margin: 20px 0; }
+  #info { margin: 20px 0; padding: 16px; background: #e6f7ff; border-radius: 8px; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h1>Advanced 3×3 Pattern Analyzer + SOR Depth Map</h1>
+<p>Using **Successive Over-Relaxation (SOR)** with increased iterations to recover fine detail and reduce blur.</p>
+
+<div id="controls">
+  <input type="file" id="fileInput" accept="image/*">
+    <button id="drawSphereBtn">Draw Test Sphere</button>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<div id="depthControls" style="margin-top: 20px; display:block;">
+    <h2>Depth Visualization (Iterative Solution)</h2>
+    <button id="restoreOriginalBtn">Restore Original Image</button>
+</div>
+
+<div id="info">Draw a Test Sphere or Upload an Image to see the depth reconstruction.</div>
+
+<script>
+let originalPixels = null;
+let originalIntensities = null; 
+let isOpaquePixel = null; 
+let canvas, ctx;
+let allPatternKeys = []; 
+let maxIntensity = 1; 
+
+// --- Configuration ---
+const INTEGRATION_SCALER = 0.3; 
+const SPHERE_RADIUS = 150;
+const MAX_ITERATIONS = 1500; // Increased to improve convergence and detail
+const ALPHA_THRESHOLD = 128; 
+const SPHERE_BACKGROUND_INTENSITY = 64; 
+const SOR_OMEGA = 1.8; // Successive Over-Relaxation factor (1.0 < omega < 2.0)
+
+// --- Utility Functions (Unchanged) ---
+
+function quantize(v) {
+  return Math.max(-4, Math.min(4, Math.round(v / 32)));
+}
+
+function getPatternKey(data, i, stride, center) {
+  const diffs = [
+    data[i - stride - 4] - center, data[i - stride    ] - center, data[i - stride + 4] - center,
+    data[i - 4         ] - center,  /* Center skipped */        data[i + 4         ] - center,
+    data[i + stride - 4] - center, data[i + stride    ] - center, data[i + stride + 4] - center
+  ];
+  return diffs.map(quantize).join(',');
+}
+
+function calculateLocalGradientMagnitude(patternKey) {
+  const vals = patternKey.split(',').map(Number);
+  return Math.abs(vals[1]) + Math.abs(vals[3]) + Math.abs(vals[4]) + Math.abs(vals[6]);
+}
+
+// --- HIGHLIGHT-WEIGHTED SLOPE FUNCTIONS (Unchanged) ---
+
+function getHorizontalSlope(patternKey, intensity) {
+  const vals = patternKey.split(',').map(Number);
+  const rawSlope = (vals[4] - vals[3]); // R-L
+  const highlightWeight = intensity / maxIntensity;
+  return rawSlope * highlightWeight * INTEGRATION_SCALER; 
+}
+
+function getVerticalSlope(patternKey, intensity) {
+  const vals = patternKey.split(',').map(Number); 
+  const rawSlope = (vals[6] - vals[1]); // B-T
+  const highlightWeight = intensity / maxIntensity;
+  return rawSlope * highlightWeight * INTEGRATION_SCALER;
+}
+
+
+// --- SLOPE SMOOTHING FUNCTION (Removed as source of blur, but logic is simplified) ---
+// Note: Keeping the function definition structure for clarity, but minimal smoothing is performed.
+function smoothMap(rawMap, w, h) {
+    const smoothed = [];
+    for (let y = 0; y < h; y++) {
+        smoothed[y] = new Array(w).fill(0);
+    }
+    // Simple copy, relying on the SOR solver's smoothing power now
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            smoothed[y][x] = rawMap[y][x];
+        }
+    }
+    return smoothed;
+}
+
+
+// --- CORE SOLVER FUNCTION (Updated with SOR) ---
+
+function solveGaussSeidelDepth() {
+  const w = canvas.width, h = canvas.height;
+  
+  // Step 1: Calculate Raw P, Q, and Object Mask
+  const P_raw = [], Q_raw = [], Z_map = [];
+  
+  for (let y = 0; y < h; y++) {
+    P_raw[y] = new Array(w).fill(0);
+    Q_raw[y] = new Array(w).fill(0);
+    Z_map[y] = new Array(w).fill(0);
+  }
+  
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const patternKey = allPatternKeys[y][x];
+      const intensity = originalIntensities[y * w + x];
+      
+      if (patternKey && isOpaquePixel[y][x]) { 
+        P_raw[y][x] = -getHorizontalSlope(patternKey, intensity); 
+        Q_raw[y][x] = -getVerticalSlope(patternKey, intensity);   
+      }
+    }
+  }
+
+    // Step 1.5: Minimal/No Smoothing - Rely on SOR for high-frequency detail.
+    const P_map = smoothMap(P_raw, w, h); // Now essentially just a copy
+    const Q_map = smoothMap(Q_raw, w, h);
+
+  // Function to check if a neighbor is a non-object pixel (background)
+  const isBoundaryPixel = (y, x) => {
+    if (!isOpaquePixel[y][x]) return false;
+    // Check immediate neighbors (ensuring bounds)
+    if (x+1 < w && !isOpaquePixel[y][x+1]) return true;
+    if (x-1 >= 0 && !isOpaquePixel[y][x-1]) return true;
+    if (y+1 < h && !isOpaquePixel[y+1][x]) return true;
+    if (y-1 >= 0 && !isOpaquePixel[y-1][x]) return true;
+    return false;
+  };
+
+
+  // Step 2: Iterative Relaxation (Successive Over-Relaxation - SOR)
+  for (let k = 0; k < MAX_ITERATIONS; k++) {
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        
+        if (isBoundaryPixel(y, x)) {
+            Z_map[y][x] = 0; // Enforce Boundary Condition
+        } 
+        else if (isOpaquePixel[y][x]) { 
+          
+          // Standard Gauss-Seidel Update (Z_GS)
+          const Z_neighbors = (
+            Z_map[y][x + 1] + Z_map[y][x - 1] + Z_map[y + 1][x] + Z_map[y - 1][x]
+          );
+          const P_term = (P_map[y][x] - P_map[y][x-1]);
+          const Q_term = (Q_map[y][x] - Q_map[y-1][x]);
+          
+          const Z_GS = (Z_neighbors + P_term + Q_term) / 4.0;
+            
+            // Successive Over-Relaxation (SOR) Update
+            Z_map[y][x] = (1 - SOR_OMEGA) * Z_map[y][x] + SOR_OMEGA * Z_GS;
+
+        } else {
+            Z_map[y][x] = 0;
+        }
+      }
+    }
+    document.getElementById('info').textContent = `SOR Iteration: ${k + 1}/${MAX_ITERATIONS}...`;
+  }
+
+  // Step 3: Color Mapping and Visualization (Unchanged)
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (isOpaquePixel[y][x]) { 
+        minZ = Math.min(minZ, Z_map[y][x]);
+        maxZ = Math.max(maxZ, Z_map[y][x]);
+      }
+    }
+  }
+  if (minZ === Infinity) { minZ = 0; maxZ = 1; }
+  const range = maxZ - minZ;
+  const normalizationFactor = range > 0 ? 255 / range : 0;
+  
+  const depthData = ctx.createImageData(w, h);
+  const ddata = depthData.data;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * (w * 4) + x * 4;
+      
+      if (isOpaquePixel[y][x]) { 
+        const z = Z_map[y][x]; 
+        const normalizedZ = Math.floor((z - minZ) * normalizationFactor);
+        
+        // Color: Near=Yellow/White (High Z), Far=Blue/Dark (Low Z)
+        ddata[i] = normalizedZ;      
+        ddata[i+1] = normalizedZ;    
+        ddata[i+2] = 255 - normalizedZ; 
+      } else {
+            ddata[i] = ddata[i+1] = ddata[i+2] = 0; 
+        }
+      ddata[i+3] = 255;
+    }
+  }
+  
+  ctx.putImageData(depthData, 0, 0);
+  document.getElementById('info').textContent = `Result: SOR Depth Map after ${MAX_ITERATIONS} iterations. Relaxation factor (ω=${SOR_OMEGA}) used for sharper detail.`;
+}
+
+// --- SPHERE GENERATION FUNCTION (Light Source Fixed to (0,0,1) for Centering) ---
+
+function drawTestSphere() {
+    canvas = document.getElementById('canvas');
+    ctx = canvas.getContext('2d');
+    canvas.width = 400; 
+    canvas.height = 400; 
+
+    const w = canvas.width;
+    const h = canvas.height;
+    const centerX = w / 2;
+    const centerY = h / 2;
+    
+    // FIX: Center the simulated light source (L=(0, 0, 1)) to center the Z_max (yellow)
+    const L_x = 0.0; 
+    const L_y = 0.0; 
+    const L_z = 1.0; 
+
+    const imgData = ctx.createImageData(w, h);
+    const data = imgData.data;
+    const intensities = [];
+    isOpaquePixel = []; 
+    maxIntensity = 0;
+    
+    // Background initialization
+    for (let y = 0; y < h; y++) {
+        isOpaquePixel[y] = new Array(w).fill(false); 
+        for (let x = 0; x < w; x++) {
+            const i = y * w * 4 + x * 4;
+            data[i] = data[i+1] = data[i+2] = SPHERE_BACKGROUND_INTENSITY; 
+            data[i+3] = 255; 
+            intensities.push(SPHERE_BACKGROUND_INTENSITY); 
+        }
+    }
+
+    // Sphere shading
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const i = y * w * 4 + x * 4;
+            const dx = x - centerX;
+            const dy = y - centerY;
+            
+            const distSq = dx * dx + dy * dy;
+
+            if (distSq < SPHERE_RADIUS * SPHERE_RADIUS) {
+                const dzSq = SPHERE_RADIUS * SPHERE_RADIUS - distSq;
+                const dz = Math.sqrt(dzSq);
+                
+                const N_x = dx / SPHERE_RADIUS;
+                const N_y = dy / SPHERE_RADIUS;
+                const N_z = dz / SPHERE_RADIUS; 
+
+                const N_dot_L = (N_x * L_x) + (N_y * L_y) + (N_z * L_z);
+                
+                let intensity = Math.max(0, N_dot_L) * 255; 
+                
+                data[i] = data[i+1] = data[i+2] = intensity;
+                data[i+3] = 255; 
+                
+                intensities[y * w + x] = intensity; 
+                maxIntensity = Math.max(maxIntensity, intensity);
+
+                if (intensity > SPHERE_BACKGROUND_INTENSITY) {
+                    isOpaquePixel[y][x] = true;
+                }
+            } 
+        }
+    }
+    maxIntensity = Math.max(1, maxIntensity); 
+
+    ctx.putImageData(imgData, 0, 0);
+    originalPixels = data; 
+    originalIntensities = intensities; 
+
+    analyzeImage();
+    solveGaussSeidelDepth(); 
+}
+
+// --- Image Loading, Pattern Analysis, Restore, and Event Listeners (Unchanged) ---
+
+document.getElementById('fileInput').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const img = new Image();
+  img.onload = () => {
+    canvas = document.getElementById('canvas');
+    ctx = canvas.getContext('2d');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imgData.data;
+    const intensities = [];
+    
+    const w = canvas.width;
+    const h = canvas.height;
+    isOpaquePixel = [];
+    maxIntensity = 0;
+
+    for (let y = 0; y < h; y++) {
+        isOpaquePixel[y] = new Array(w);
+        for (let x = 0; x < w; x++) {
+            const i = y * w * 4 + x * 4;
+
+            // Grayscale conversion
+            const gray = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
+            data[i] = data[i+1] = data[i+2] = gray;
+            intensities.push(gray);
+            maxIntensity = Math.max(maxIntensity, gray); 
+
+            // Alpha-channel-based opaque mask
+            isOpaquePixel[y][x] = (data[i+3] > ALPHA_THRESHOLD);
+        }
+    }
+    maxIntensity = Math.max(1, maxIntensity); 
+
+    ctx.putImageData(imgData, 0, 0);
+    originalPixels = new Uint8ClampedArray(data);
+    originalIntensities = intensities; 
+    
+    analyzeImage();
+    solveGaussSeidelDepth(); 
+  };
+  img.src = URL.createObjectURL(file);
+});
+
+
+async function analyzeImage() {
+  const w = canvas.width, h = canvas.height;
+  const data = originalPixels;
+  const stride = w * 4;
+
+  allPatternKeys = []; 
+  for (let y = 0; y < h; y++) {
+    allPatternKeys[y] = [];
+  }
+
+  for (let y = 1; y < h-1; y++) {
+    for (let x = 1; x < w-1; x++) {
+      const i = y * stride + x * 4;
+      const center = data[i];
+      const key = getPatternKey(data, i, stride, center);
+      allPatternKeys[y][x] = key; 
+    }
+  }
+}
+
+function restoreImage() {
+  const w = canvas.width, h = canvas.height;
+  const imgData = ctx.createImageData(w, h);
+  
+  for(let i=0; i < originalPixels.length; i += 4) {
+    imgData.data[i] = originalPixels[i];
+    imgData.data[i+1] = originalPixels[i+1];
+    imgData.data[i+2] = originalPixels[i+2];
+    imgData.data[i+3] = originalPixels[i+3];
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  document.getElementById('info').textContent = "Restored original grayscale image. Draw a Test Sphere or Upload an Image.";
+}
+
+
+document.getElementById('drawSphereBtn').addEventListener('click', drawTestSphere);
+document.getElementById('restoreOriginalBtn').addEventListener('click', restoreImage);
+
+</script>
+
+</body>
+</html>

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Advanced Mobile Depth Viewer</title>
+
+<style>
+html,body{
+  margin:0;
+  background:#000;
+  overflow:hidden;
+  touch-action:none;
+}
+canvas{
+  width:100vw;
+  height:100vh;
+  display:block;
+}
+#ui{
+  position:fixed;
+  bottom:10px;
+  left:50%;
+  transform:translateX(-50%);
+  background:rgba(0,0,0,.65);
+  padding:12px;
+  border-radius:14px;
+  color:#fff;
+  font-family:sans-serif;
+  font-size:13px;
+}
+label{display:block;margin-top:6px}
+input,select{width:220px}
+</style>
+</head>
+
+<body>
+<video id="video" autoplay playsinline hidden></video>
+<canvas id="canvas"></canvas>
+
+<div id="ui">
+  <label>Mode
+    <select id="mode">
+      <option value="depth">Depth</option>
+      <option value="heat">Heatmap</option>
+      <option value="overlay">Overlay</option>
+      <option value="blur">Depth Blur</option>
+    </select>
+  </label>
+
+  <label>Depth Strength
+    <input id="strength" type="range" min="0.5" max="3" step="0.1" value="1.4">
+  </label>
+
+  <label>Smoothing
+    <input id="smooth" type="range" min="0" max="0.95" step="0.05" value="0.75">
+  </label>
+</div>
+
+<script>
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d",{willReadFrequently:true});
+
+const modeSel = document.getElementById("mode");
+const strength = document.getElementById("strength");
+const smooth = document.getElementById("smooth");
+
+const W = 160, H = 120;
+canvas.width = W;
+canvas.height = H;
+
+let prevDepth = new Uint8ClampedArray(W*H*4);
+
+async function startCamera(){
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video:{facingMode:{ideal:"environment"}},
+    audio:false
+  });
+  video.srcObject = stream;
+}
+startCamera();
+
+function heatmap(v){
+  return [
+    Math.max(0,Math.min(255,255*(v-128)/127)),
+    Math.max(0,255-Math.abs(v-128)*2),
+    Math.max(0,255*(128-v)/127)
+  ];
+}
+
+function computeDepth(img,str){
+  const d=img.data;
+  const out=new Uint8ClampedArray(d.length);
+
+  for(let y=1;y<H-1;y++){
+    for(let x=1;x<W-1;x++){
+      const i=(y*W+x)*4;
+      const c=d[i];
+      const dx=Math.abs(c-d[i+4])+Math.abs(c-d[i-4]);
+      const dy=Math.abs(c-d[i+W*4])+Math.abs(c-d[i-W*4]);
+      let v=Math.min(255,(dx+dy)*str);
+
+      // temporal smoothing
+      v = prevDepth[i]*(smooth.value) + v*(1-smooth.value);
+
+      prevDepth[i]=prevDepth[i+1]=prevDepth[i+2]=v;
+      prevDepth[i+3]=255;
+
+      if(modeSel.value==="heat"){
+        const h=heatmap(v);
+        out[i]=h[0]; out[i+1]=h[1]; out[i+2]=h[2];
+      }else{
+        out[i]=out[i+1]=out[i+2]=v;
+      }
+      out[i+3]=255;
+    }
+  }
+  return new ImageData(out,W,H);
+}
+
+function blurWithDepth(img,depth){
+  const d=img.data, z=depth.data;
+  const out=new Uint8ClampedArray(d.length);
+
+  for(let i=0;i<d.length;i+=4){
+    const blur = Math.floor((255-z[i])/50);
+    let r=0,g=0,b=0,c=0;
+
+    for(let y=-blur;y<=blur;y++){
+      for(let x=-blur;x<=blur;x++){
+        const p=i+x*4+y*W*4;
+        if(p>0 && p<d.length){
+          r+=d[p]; g+=d[p+1]; b+=d[p+2]; c++;
+        }
+      }
+    }
+    out[i]=r/c; out[i+1]=g/c; out[i+2]=b/c; out[i+3]=255;
+  }
+  return new ImageData(out,W,H);
+}
+
+function render(){
+  ctx.drawImage(video,0,0,W,H);
+  const frame=ctx.getImageData(0,0,W,H);
+  const depth=computeDepth(frame,strength.value);
+
+  if(modeSel.value==="overlay"){
+    ctx.putImageData(frame,0,0);
+    ctx.globalAlpha=0.6;
+    ctx.putImageData(depth,0,0);
+    ctx.globalAlpha=1;
+  }
+  else if(modeSel.value==="blur"){
+    const b=blurWithDepth(frame,depth);
+    ctx.putImageData(b,0,0);
+  }
+  else{
+    ctx.putImageData(depth,0,0);
+  }
+  requestAnimationFrame(render);
+}
+
+video.onloadedmetadata=render;
+</script>
+</body>
+</html>

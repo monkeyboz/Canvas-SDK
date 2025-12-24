@@ -1,0 +1,615 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rap Empire - 2D Canvas Battle</title>
+<style>
+  body { margin:0; background:#16213e; display:flex; justify-content:center; align-items:center; height:100vh; }
+  canvas { display:block; }
+</style>
+</head>
+<body>
+<canvas id="game-canvas"></canvas>
+<script>
+const canvas = document.getElementById('game-canvas');
+const ctx = canvas.getContext('2d');
+
+// ==================== Responsive ====================
+function resizeCanvas(){
+    canvas.width = window.innerWidth * 0.95;
+    canvas.height = window.innerHeight * 0.95;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// ==================== Game State ====================
+let currentScreen = 'home';
+let fame = 1000;
+let fans = 5000;
+let level = 1;
+let rappers = [];
+let SIGN_COST = 500 * level;
+let selectedRapper = null;
+
+// Animation states
+let transition = { active: false, alpha: 0, direction: 'out' }; // for screen transitions
+let mouse = {x: 0, y: 0};
+let hoverButton = null;
+let buttonScales = {};
+
+// Preload base image
+const baseImage = new Image();
+baseImage.src = '2.jpg'; // Free stage image from OGA or similar
+
+// ==================== Rapper Templates ====================
+const rapperTemplates = [
+  {name:'Eminem', recordSales:200, concertTickets:1000, imageSrc:'1.jpg', color:'#FF6B6B'},
+  {name:'Jay-Z', recordSales:300, concertTickets:1500, imageSrc:'2.jpg', color:'#4ECDC4'},
+  {name:'Kendrick Lamar', recordSales:400, concertTickets:2000, imageSrc:'3.jpg', color:'#45B7D1'},
+  {name:'Nicki Minaj', recordSales:250, concertTickets:1200, imageSrc:'4.jpg', color:'#96CEB4'},
+  {name:'Drake', recordSales:350, concertTickets:1800, imageSrc:'5.jpg', color:'#FFEAA7'},
+  {name:'Snoop Dogg', recordSales:280, concertTickets:1300, imageSrc:'5.jpg', color:'#DDA0DD'}
+];
+rapperTemplates.forEach(t=>{ t.image = new Image(); t.image.src=t.imageSrc; });
+
+// Song Lyrics for Joint Attacks
+const rapLyrics = [
+  {artist: 'Prodigy', song: 'Shook Ones (Pt. II)', lyric: 'For all of those who wanna profile and pose / Rock you in your face, stab your brain with your nose bone.'},
+  {artist: 'MC Ren', song: 'Fuck the Police', lyric: 'Fuck the police, and Ren said it with authority / Because the niggas on the street is a majority.'},
+  {artist: 'Hopsin', song: 'The Ill Mind of Hopsin', lyric: 'Nah, you hamster-ass nigga. You just stuck in a loop.'},
+  {artist: 'Cage', song: 'Agent Orange', lyric: 'Pour beer out for yourself because you\'re walking dead / I\'ll burn your house down like a fucking Talking Head.'},
+  {artist: 'Eminem', song: 'Renegade', lyric: 'See it\'s easy as cake, simple as whistling Dixie / While I\'m waving the pistol at sixty Christians against me.'},
+  {artist: 'Public Enemy', song: 'Fight the Power', lyric: 'Motherfuck him and John Wayne.'},
+  {artist: '2Pac', song: 'Hail Mary', lyric: 'I ain\'t a killer, but don\'t push me / Revenge is like the sweetest joy, next to getting pussy.'},
+  {artist: 'Ice-T', song: '99 Problems', lyric: 'I\'ve got 99 problems, but a bitch ain\'t one.'},
+  {artist: 'Notorious B.I.G.', song: 'Who Shot Ya?', lyric: 'I can hear sweat trickling down your cheek / Your heartbeat sound like Sasquatch feet / Thundering, shaking the concrete.'},
+  {artist: 'Nas', song: 'The World Is Yours', lyric: 'I\'m out for dead presidents to represent me.'},
+  {artist: 'Pusha T', song: 'Story of Adidon', lyric: 'OVO 40, hunched over like he 80, tick, tick, tick/How much time he got? That man is sick, sick, sick'},
+  {artist: 'Tupac', song: 'Hit Em Up', lyric: 'First off, f**k your b***h and the click you claim/Westside when we ride, come equipped with game'},
+  {artist: 'Nas', song: 'Ether', lyric: 'I rule you—before, you used to rap like the Fu-Schnickens/ Nas designed your blueprint, who you kidding?'},
+  {artist: 'Kendrick Lamar', song: 'Not Like Us', lyric: 'They not like us, they not like us, they not like us'},
+  {artist: 'Drake', song: 'Back to Back', lyric: 'You love her, then you gotta give the world to her/Is that a world tour or your girl\'s tour?'},
+  {artist: 'Jay-Z', song: 'Takeover', lyric: 'You little f*ggot, I could squeeze your whole crew in one hand'},
+  {artist: 'Ice Cube', song: 'No Vaseline', lyric: 'Got damn, I\'m glad y\'all set it off/Used to be hard, now you\'re just wet and soft'},
+  {artist: 'Eminem', song: 'Killshot', lyric: 'How the f**k can him and I battle? / He\'ll have to f**k Kim in my Flannel'},
+  {artist: '2Pac', song: 'Against All Odds', lyric: 'Puffy weaker than the f**kin\' block he walk on'},
+  {artist: 'Nas', song: 'Destroy & Rebuild', lyric: 'QB will have drama with my n***as from Uptown'}
+];
+
+// ==================== Utils ====================
+function easeInOut(t){ return t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2; }
+function drawText(text,x,y,size='20px',color='white',align='left'){ ctx.fillStyle=color; ctx.font=`${size} Arial`; ctx.textAlign=align; ctx.fillText(text,x,y); }
+function drawRect(x,y,w,h,color){ ctx.fillStyle=color; ctx.fillRect(x,y,w,h); }
+function drawCircle(x,y,r,color){ ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fillStyle=color; ctx.fill(); }
+function drawImage(image,x,y,w,h){ console.log(image.src); if(image.complete) ctx.drawImage(image,x,y,w,h); }
+function drawRapper(rapper,x,y,size=80,scale=1){
+    size*=scale;
+    if(rapper.image.complete) drawImage(rapper.image, x-size/2, y-size/2, size, size);
+    else drawRect(x-size/2,y-size/2,size,size,rapper.color||'#FF6B6B');
+    drawText(rapper.name,x,y+size/2+20,'14px','yellow','center');
+    drawText(`+${rapper.recordSales} Records`,x,y+size/2+35,'12px','white','center');
+    drawText(`+${rapper.concertTickets} Tickets`,x,y+size/2+50,'12px','white','center');
+}
+
+// ==================== Collaborate & Sign ====================
+function collaborateRappers(){
+    let countMap={};
+    rappers.forEach(r=>countMap[r.name]=(countMap[r.name]||0)+1);
+    let collaborated=false;
+    for(let name in countMap){
+        if(countMap[name]>=2){
+            let removed=0;
+            for(let i=rappers.length-1;i>=0;i--){
+                if(rappers[i].name===name && removed<2){ rappers.splice(i,1); removed++; }
+            }
+            let template = rapperTemplates.find(t=>t.name===name);
+            let newRapper = {...template, recordSales:template.recordSales*2, concertTickets:template.concertTickets*2, image:new Image()};
+            newRapper.image.src = template.imageSrc;
+            newRapper.birthTime = Date.now();
+            rappers.push(newRapper);
+            fame += newRapper.recordSales - template.recordSales;
+            fans += newRapper.concertTickets - template.concertTickets;
+            collaborated=true;
+        }
+    }
+    collaborated?alert("🔧 Rappers collaborated!"):alert("❌ No duplicates to collaborate.");
+    checkLevelUp();
+}
+
+function signRapper(){
+    if(fans<SIGN_COST){ alert('❌ Not enough fans!'); return; }
+    const t = rapperTemplates[Math.floor(Math.random()*rapperTemplates.length)];
+    let rapper = {...t, image:new Image(), birthTime:Date.now()};
+    rapper.image.src=t.imageSrc;
+    rappers.push(rapper);
+    fans -= SIGN_COST;
+    fame += t.recordSales;
+    fans += t.concertTickets;
+    alert(`✅ Signed ${rapper.name}!`);
+    checkLevelUp();
+}
+
+// ==================== Level Check ====================
+function checkLevelUp(){
+    if(fame >= level * 2000){ level++; SIGN_COST = 500 * level; alert(`⭐ Level Up! Now Level ${level}`); }
+}
+
+// ==================== Battle System ====================
+let battle = {
+    active:false,
+    playerCrew:[],
+    rivalCrew:[],
+    turn:0, // 0: player, 1: rival
+    frame:0,
+    log:[],
+    outcome:null,
+    attacks: [], // {attackerX, attackerY, targetX, targetY, progress, isJoint: false/true, attacker2X, attacker2Y}
+    lyricsUsed: [] // To collect joint attack lyrics
+};
+
+function startBattle(){
+    if(rappers.length===0){ alert('❌ Need at least one rapper!'); return; }
+    battle.active=true;
+    battle.turn=0;
+    battle.frame=0;
+    battle.log=[];
+    battle.outcome=null;
+    battle.attacks = [];
+    battle.lyricsUsed = [];
+    battle.playerCrew = rappers.map(r=>({...r, hp:100, currentHP:100}));
+    battle.rivalCrew = [];
+    for(let i=0;i<Math.min(3, rappers.length);i++){
+        battle.rivalCrew.push({name:'Rival '+(i+1), hp:100*level, currentHP:100, power:Math.floor(Math.random()*300)*level, color:'#FF3333'});
+    }
+}
+
+function updateBattle(){
+    if(!battle.active) return;
+
+    battle.frame++;
+
+    // Update attacks
+    battle.attacks = battle.attacks.filter(a => {
+        a.progress += 0.05;
+        if (a.progress >= 1) {
+            // Apply damage at end of animation
+            a.target.currentHP = Math.max(0, a.target.currentHP - a.damage);
+            a.target.hp = a.target.currentHP;
+            if (a.isJoint) {
+                let randomLyric = rapLyrics[Math.floor(Math.random() * rapLyrics.length)];
+                battle.log.push(`${a.attacker.name} joint diss: "${randomLyric.lyric}" (from ${randomLyric.artist} - ${randomLyric.song}) for ${Math.floor(a.damage)} dmg`);
+                battle.lyricsUsed.push(randomLyric.lyric);
+                // Play the lyric as audio using SpeechSynthesis if supported
+                if ('speechSynthesis' in window) {
+                    let utterance = new SpeechSynthesisUtterance(randomLyric.lyric);
+                    window.speechSynthesis.speak(utterance);
+                }
+            } else {
+                battle.log.push(`${a.attacker.name} disses ${a.target.name} for ${Math.floor(a.damage)} dmg`);
+            }
+            if (a.target.hp <= 0) {
+                if (a.targetSide === 'rival') {
+                    battle.rivalCrew = battle.rivalCrew.filter(u => u.hp > 0);
+                } else {
+                    battle.playerCrew = battle.playerCrew.filter(u => u.hp > 0);
+                }
+            }
+            return false;
+        }
+        return true;
+    });
+
+    // Trigger attack every 60 frames if no ongoing attacks
+    if (battle.frame % 60 === 0 && battle.attacks.length === 0) {
+        if (battle.turn === 0) { // Player attacks
+            if (Math.random() < 0.3 && battle.playerCrew.length >= 2) { // 30% chance for joint attack
+                let attacker1Index = Math.floor(Math.random() * battle.playerCrew.length);
+                let attacker2Index = Math.floor(Math.random() * battle.playerCrew.length);
+                while (attacker2Index === attacker1Index) {
+                    attacker2Index = Math.floor(Math.random() * battle.playerCrew.length);
+                }
+                let attacker1 = battle.playerCrew[attacker1Index];
+                let attacker2 = battle.playerCrew[attacker2Index];
+                let targetIndex = Math.floor(Math.random() * battle.rivalCrew.length);
+                let target = battle.rivalCrew[targetIndex];
+                let damage = (attacker1.recordSales + attacker2.recordSales) / 5;
+                battle.attacks.push({
+                    attackerX: 150 + attacker1Index * (canvas.width / 4),
+                    attackerY: canvas.height / 2 + 100,
+                    attacker2X: 150 + attacker2Index * (canvas.width / 4),
+                    attacker2Y: canvas.height / 2 + 100,
+                    targetX: canvas.width - 150 - targetIndex * (canvas.width / 4),
+                    targetY: canvas.height / 2 - 50,
+                    progress: 0,
+                    attacker: {name: attacker1.name + ' & ' + attacker2.name},
+                    target,
+                    damage,
+                    targetSide: 'rival',
+                    isJoint: true
+                });
+            } else {
+                let attackerIndex = Math.floor(Math.random() * battle.playerCrew.length);
+                let attacker = battle.playerCrew[attackerIndex];
+                let targetIndex = Math.floor(Math.random() * battle.rivalCrew.length);
+                let target = battle.rivalCrew[targetIndex];
+                let damage = attacker.recordSales / 5;
+                battle.attacks.push({
+                    attackerX: 150 + attackerIndex * (canvas.width / 4),
+                    attackerY: canvas.height / 2 + 100,
+                    targetX: canvas.width - 150 - targetIndex * (canvas.width / 4),
+                    targetY: canvas.height / 2 - 50,
+                    progress: 0,
+                    attacker,
+                    target,
+                    damage,
+                    targetSide: 'rival',
+                    isJoint: false
+                });
+            }
+        } else { // Rival attacks
+            let attackerIndex = Math.floor(Math.random() * battle.rivalCrew.length);
+            let attacker = battle.rivalCrew[attackerIndex];
+            let targetIndex = Math.floor(Math.random() * battle.playerCrew.length);
+            let target = battle.playerCrew[targetIndex];
+            let damage = attacker.power / 5;
+            battle.attacks.push({
+                attackerX: canvas.width - 150 - attackerIndex * (canvas.width / 4),
+                attackerY: canvas.height / 2 - 50,
+                targetX: 150 + targetIndex * (canvas.width / 4),
+                targetY: canvas.height / 2 + 100,
+                progress: 0,
+                attacker,
+                target,
+                damage,
+                targetSide: 'player',
+                isJoint: false
+            });
+        }
+        battle.turn = 1 - battle.turn;
+    }
+
+    // Check end
+    if (battle.playerCrew.length === 0 || battle.rivalCrew.length === 0) {
+        battle.active = false;
+        if (battle.playerCrew.length > 0) {
+            battle.outcome = 'win';
+            let rewardFame = Math.floor(Math.random() * 500) + 500;
+            let rewardFans = Math.floor(Math.random() * 2000) + 1000;
+            fame += rewardFame;
+            fans += rewardFans;
+            battle.log.push(`Victory! +${rewardFame} Fame, +${rewardFans} Fans`);
+        } else {
+            battle.outcome = 'lose';
+            let lossFans = Math.floor(fans * 0.1);
+            fans -= lossFans;
+            if (fans < 0) fans = 0;
+            battle.log.push(`Defeat! -${lossFans} Fans`);
+        }
+        // Play all lyrics together with a beat (sequential with delay)
+        if ('speechSynthesis' in window && battle.lyricsUsed.length > 0) {
+            battle.lyricsUsed.forEach((lyric, index) => {
+                setTimeout(() => {
+                    let utterance = new SpeechSynthesisUtterance(lyric);
+                    window.speechSynthesis.speak(utterance);
+                }, index * 2000); // 2 seconds delay for "beat"
+            });
+        }
+        setTimeout(() => { currentScreen = 'home'; checkLevelUp(); }, 2000 + battle.lyricsUsed.length * 2000); // Delay for audio to finish
+    }
+}
+
+function drawBattle(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    drawRect(0,0,canvas.width,canvas.height,'#222244');
+
+    // Draw player crew with shake if hit
+    battle.playerCrew.forEach((u,i)=>{
+        let x = 150 + i*(canvas.width/4);
+        let y = canvas.height/2+100;
+        let shake = 0;
+        if (battle.attacks.some(a => a.target === u && a.progress > 0.8)) {
+            shake = Math.sin(battle.frame * 0.5) * 5;
+        }
+        drawRapper(u, x + shake, y, 80, 1);
+        drawRect(x-40, y+50, 80 * (u.currentHP / 100), 8, '#00FF00');
+        drawRect(x-40 + 80 * (u.currentHP / 100), y+50, 80 * (1 - u.currentHP / 100), 8, '#FF0000');
+    });
+
+    // Draw rival crew with shake
+    battle.rivalCrew.forEach((u,i)=>{
+        let x = canvas.width - 150 - i*(canvas.width/4);
+        let y = canvas.height/2-50;
+        let shake = 0;
+        if (battle.attacks.some(a => a.target === u && a.progress > 0.8)) {
+            shake = Math.sin(battle.frame * 0.5) * 5;
+        }
+        drawCircle(x + shake, y, 40, u.color);
+        drawText(u.name, x + shake, y-50, '14px', 'white', 'center');
+        drawRect(x-40, y-30, 80 * (u.currentHP / 100), 8, '#FF0000');
+        drawRect(x-40 + 80 * (u.currentHP / 100), y-30, 80 * (1 - u.currentHP / 100), 8, '#333333');
+    });
+
+    // Draw attacks as animated lines/particles
+    battle.attacks.forEach(a => {
+        const prog = easeInOut(a.progress);
+        const currX = a.attackerX + (a.targetX - a.attackerX) * prog;
+        const currY = a.attackerY + (a.targetY - a.attackerY) * prog;
+        ctx.strokeStyle = 'rgba(255,215,0,0.8)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(a.attackerX, a.attackerY);
+        ctx.lineTo(currX, currY);
+        ctx.stroke();
+
+        if (a.isJoint) {
+            const currX2 = a.attacker2X + (a.targetX - a.attacker2X) * prog;
+            const currY2 = a.attacker2Y + (a.targetY - a.attacker2Y) * prog;
+            ctx.beginPath();
+            ctx.moveTo(a.attacker2X, a.attacker2Y);
+            ctx.lineTo(currX2, currY2);
+            ctx.stroke();
+        }
+
+        // Particles
+        for (let p = 0; p < 5; p++) {
+            const px = currX + Math.random() * 10 - 5;
+            const py = currY + Math.random() * 10 - 5;
+            drawCircle(px, py, 2 + Math.random() * 2, 'yellow');
+        }
+    });
+
+    // Log with fade in
+    battle.log.slice(-3).forEach((msg,i)=>{
+        const alpha = Math.min(1, (battle.frame % 60) / 30); // Fade in over 30 frames
+        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+        drawText(msg,canvas.width/2,canvas.height-100+i*20,'16px','white','center');
+    });
+
+    if(!battle.active && battle.outcome){
+        const scale = 1 + Math.sin(battle.frame * 0.1) * 0.1; // Pulse
+        ctx.save();
+        ctx.translate(canvas.width/2, 100);
+        ctx.scale(scale, scale);
+        ctx.translate(-canvas.width/2, -100);
+        drawText(battle.outcome==='win'?'Victory!':'Defeat!',canvas.width/2,100,'40px',battle.outcome==='win'?'#00FF00':'#FF0000','center');
+        ctx.restore();
+
+        // Summary of lyrics
+        drawText('Battle Lyrics Summary:', canvas.width / 2, 150, '24px', 'white', 'center');
+        battle.lyricsUsed.forEach((lyric, i) => {
+            drawText(`"${lyric}"`, canvas.width / 2, 180 + i * 20, '16px', 'yellow', 'center');
+        });
+    }
+}
+
+// ==================== Update Animations ====================
+function updateAnimations() {
+    // Transition
+    if (transition.active) {
+        const speed = 0.05;
+        if (transition.direction === 'out') {
+            transition.alpha += speed;
+            if (transition.alpha >= 1) {
+                transition.direction = 'in';
+            }
+        } else {
+            transition.alpha -= speed;
+            if (transition.alpha <= 0) {
+                transition.active = false;
+            }
+        }
+    }
+
+    // Button scales
+    for (let key in buttonScales) {
+        const target = hoverButton === key ? 1.05 : 1;
+        buttonScales[key] += (target - buttonScales[key]) * 0.2;
+    }
+}
+
+// ==================== UI & Game Loop ====================
+let buttons = [];
+function drawUI(){
+    if(battle.active) return; // Battle draws itself
+
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // Background
+    if (currentScreen === 'home' && baseImage.complete) {
+        drawImage(baseImage, 0, 0, canvas.width, canvas.height);
+        drawRect(0, 0, canvas.width, canvas.height, 'rgba(0,0,0,0.3)');
+    } else {
+        drawRect(0,0,canvas.width,canvas.height,'#16213e');
+    }
+
+    // Stats panel
+    drawRect(10,10,canvas.width-20,80,'rgba(0,0,0,0.5)');
+    drawText(`💪 Fame: ${fame.toLocaleString()}`,30,40,'20px');
+    drawText(`👥 Fans: ${fans.toLocaleString()}`,30,65,'20px');
+    drawText(`⭐ Level: ${level}`,canvas.width/2,40,'20px','white','center');
+
+    // Bottom nav
+    const navH = 60, navY = canvas.height - navH;
+    drawRect(0, navY, canvas.width, navH, 'rgba(0,0,0,0.9)');
+    const navBtns = ['home', 'sign', 'battle'];
+    buttons = [];
+    navBtns.forEach((scr, i) => {
+        const btnW = canvas.width / 3, btnX = i * btnW;
+        const active = currentScreen === scr;
+        const scale = buttonScales[`nav_${scr}`] || 1;
+        ctx.save();
+        ctx.translate(btnX + btnW/2, navY + navH/2);
+        ctx.scale(scale, scale);
+        ctx.translate(-btnX - btnW/2, -navY - navH/2);
+        drawRect(btnX, navY, btnW, navH, active ? 'rgba(0,123,255,0.8)' : 'transparent');
+        drawText(scr.charAt(0).toUpperCase() + scr.slice(1), btnX + btnW/2, navY + 30, '16px', active ? '#ffd700' : 'white', 'center');
+        ctx.restore();
+        buttons.push({id: `nav_${scr}`, x: btnX, y: navY, w: btnW, h: navH, action: 'nav_' + scr});
+    });
+
+    // Screen-specific
+    if (currentScreen === 'home') {
+        drawText('Your Rappers', canvas.width / 2, 120, '24px', '#FFD700', 'center');
+        if (rappers.length === 0) {
+            drawText('No rappers yet. Sign some!', canvas.width / 2, 160, '16px', '#AAAAAA', 'center');
+        } else {
+            const cols = 3;
+            const spacingX = canvas.width / cols;
+            const startX = spacingX / 2;
+            const startY = 150;
+            const spacingY = 150;
+            rappers.forEach((r, i) => {
+                let col = i % cols, row = Math.floor(i / cols);
+                let x = startX + col * spacingX, y = startY + row * spacingY;
+                let scale = 1;
+                if (r.birthTime) {
+                    const age = (Date.now() - r.birthTime) / 1000;
+                    if (age < 0.5) {
+                        scale = easeInOut(age / 0.5);
+                    } else {
+                        delete r.birthTime;
+                    }
+                }
+                drawRapper(r, x, y, 80, scale);
+                r.pos = {x: x - 40, y: y - 40, w: 80, h: 80};
+            });
+        }
+
+        // Collaborate button
+        const btnW = 140, btnH = 40, btnX = canvas.width - 160, btnY = 20;
+        const scale = buttonScales['collaborate'] || 1;
+        ctx.save();
+        ctx.translate(btnX + btnW/2, btnY + btnH/2);
+        ctx.scale(scale, scale);
+        ctx.translate(-btnX - btnW/2, -btnY - btnH/2);
+        drawRect(btnX, btnY, btnW, btnH, 'rgba(0,123,255,0.7)');
+        drawText('Collaborate Rappers', btnX + btnW/2, btnY + 25, '16px', 'white', 'center');
+        ctx.restore();
+        buttons.push({id: 'collaborate', x: btnX, y: btnY, w: btnW, h: btnH, action: 'collaborate'});
+
+        // Selected rapper
+        if (selectedRapper) {
+            drawRect(50, 100, canvas.width - 100, canvas.height - 200, 'rgba(0,0,0,0.8)');
+            drawRapper(selectedRapper, canvas.width / 2, 200, 160);
+            drawText(selectedRapper.name, canvas.width / 2, 350, '28px', '#FFD700', 'center');
+            drawText(`Record Sales: +${selectedRapper.recordSales}`, canvas.width / 2, 400, '20px', 'white', 'center');
+            drawText(`Concert Tickets: +${selectedRapper.concertTickets}`, canvas.width / 2, 430, '20px', 'white', 'center');
+            drawText(`Description: A legendary rapper known for record-breaking sales.`, canvas.width / 2, 460, '18px', 'white', 'center');
+            drawText('Click anywhere to close', canvas.width / 2, 500, '16px', '#AAAAAA', 'center');
+        }
+    } else if (currentScreen === 'sign') {
+        drawText('🔮 Sign Rapper', canvas.width / 2, 120, '28px', '#FFD700', 'center');
+        drawText(`Fans required: ${SIGN_COST}`, canvas.width / 2, 160, '20px', 'white', 'center');
+        drawText(`Current Fans: ${fans.toLocaleString()}`, canvas.width / 2, 190, '20px', 'white', 'center');
+        drawText('Sign a random talented rapper!', canvas.width / 2, 220, '16px', '#AAAAAA', 'center');
+
+        const btnW = 300, btnH = 80, btnX = canvas.width / 2 - 150, btnY = canvas.height / 2 - 40;
+        const scale = buttonScales['sign'] || 1;
+        ctx.save();
+        ctx.translate(btnX + btnW/2, btnY + btnH/2);
+        ctx.scale(scale, scale);
+        ctx.translate(-btnX - btnW/2, -btnY - btnH/2);
+        drawRect(btnX, btnY, btnW, btnH, '#FF6B6B');
+        drawText('SIGN NOW!', btnX + btnW/2, btnY + 50, '24px', '#000000', 'center');
+        ctx.restore();
+        buttons.push({id: 'sign', x: btnX, y: btnY, w: btnW, h: btnH, action: 'sign'});
+    } else if (currentScreen === 'battle' && !battle.active) {
+        drawText('⚔️ Rap Battle', canvas.width / 2, 120, '28px', '#FFD700', 'center');
+        drawText('Requires at least 1 rapper', canvas.width / 2, 160, '20px', 'white', 'center');
+        drawText(`Rappers Ready: ${rappers.length}`, canvas.width / 2, 190, '20px', 'white', 'center');
+        drawText('Win fame and fans or risk losing fans!', canvas.width / 2, 220, '16px', '#AAAAAA', 'center');
+
+        const btnW = 300, btnH = 80, btnX = canvas.width / 2 - 150, btnY = canvas.height / 2 - 40;
+        const scale = buttonScales['battle'] || 1;
+        ctx.save();
+        ctx.translate(btnX + btnW/2, btnY + btnH/2);
+        ctx.scale(scale, scale);
+        ctx.translate(-btnX - btnW/2, -btnY - btnH/2);
+        drawRect(btnX, btnY, btnW, btnH, '#FFD700');
+        drawText('START BATTLE!', btnX + btnW/2, btnY + 50, '24px', '#000000', 'center');
+        ctx.restore();
+        buttons.push({id: 'battle', x: btnX, y: btnY, w: btnW, h: btnH, action: 'battle'});
+    }
+
+    // Transition overlay
+    if (transition.active) {
+        drawRect(0, 0, canvas.width, canvas.height, `rgba(22,33,62,${transition.alpha})`);
+    }
+}
+
+// ==================== Main Animate ====================
+function animate(){
+    updateAnimations();
+    if (battle.active) updateBattle();
+    drawUI();
+    if (battle.active) drawBattle();
+    requestAnimationFrame(animate);
+}
+animate();
+
+// ==================== Mouse ====================
+canvas.addEventListener('mousemove',e=>{
+    const rect=canvas.getBoundingClientRect();
+    mouse.x = e.clientX-rect.left;
+    mouse.y = e.clientY-rect.top;
+    hoverButton=null;
+    for(let btn of buttons){
+        if(mouse.x>btn.x && mouse.x<btn.x+btn.w && mouse.y>btn.y && mouse.y<btn.y+btn.h){
+            hoverButton=btn.id;
+            if(!buttonScales[btn.id]) buttonScales[btn.id]=1;
+            break;
+        }
+    }
+    canvas.style.cursor=hoverButton?'pointer':'default';
+});
+
+canvas.addEventListener('click',e=>{
+    const rect=canvas.getBoundingClientRect();
+    const x=e.clientX-rect.left, y=e.clientY-rect.top;
+
+    if (currentScreen === 'home' && selectedRapper) {
+        selectedRapper = null;
+        return;
+    }
+
+    for(let btn of buttons){
+        if(x>btn.x && x<btn.x+btn.w && y>btn.y && y<btn.y+btn.h){
+            if(btn.action==='collaborate') collaborateRappers();
+            if(btn.action==='sign') signRapper();
+            if(btn.action==='battle') {
+                transition.active = true;
+                transition.alpha = 0;
+                transition.direction = 'out';
+                setTimeout(() => startBattle(), 200);
+            }
+            if(btn.action.startsWith('nav_')) {
+                const newScreen = btn.action.slice(4);
+                if (currentScreen !== newScreen) {
+                    transition.active = true;
+                    transition.alpha = 0;
+                    transition.direction = 'out';
+                    setTimeout(() => { currentScreen = newScreen; selectedRapper = null; }, 200);
+                }
+            }
+            return;
+        }
+    }
+
+    if (currentScreen === 'home') {
+        for (let rapper of rappers) {
+            const pos = rapper.pos;
+            if (pos && x > pos.x && x < pos.x + pos.w && y > pos.y && y < pos.y + pos.h) {
+                selectedRapper = rapper;
+                return;
+            }
+        }
+    }
+});
+
+// Prevent context menu
+canvas.addEventListener('contextmenu',e=>e.preventDefault());
+</script>
+</body>
+</html>

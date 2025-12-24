@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Composite Bezier Curve Animator</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the interactive elements */
+        .control-point {
+            position: absolute;
+            width: 1rem;
+            height: 1rem;
+            border-radius: 50%;
+            cursor: grab;
+            z-index: 10;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.4);
+            transition: transform 0.1s ease-out;
+            transform: translate(-50%, -50%); /* Center the div over the coordinates */
+        }
+        .control-point:active {
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.8), 0 0 15px rgba(0, 0, 0, 0.6);
+        }
+
+        /* Fixed Anchor Points (A0, A2) */
+        .anchor-fixed { background-color: #f56565; } /* Red */
+        /* Draggable Anchor Point (A1) */
+        .anchor-intermediate { background-color: #ed8936; } /* Orange */
+        /* Draggable Control Handles (C1, C2, C3, C4) */
+        .control-handle { background-color: #48bb78; } /* Green */
+
+        /* Set the font for the application */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Ensure the canvas is responsive */
+        #bezierCanvas {
+            border: 2px dashed #4b5563; /* Gray-600 */
+            background-color: #f9fafb; /* Gray-50 */
+            touch-action: none; /* Prevents unwanted scrolling on touch devices */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 md:p-8 flex items-start justify-center">
+
+    <div id="app" class="w-full max-w-5xl bg-white p-6 md:p-8 rounded-xl shadow-2xl space-y-6">
+        <header class="text-center">
+            <h1 class="text-3xl font-extrabold text-blue-700">Composite Bézier Curve Animator (2 Segments)</h1>
+            <p class="text-gray-500 mt-1">Drag the 5 non-fixed points (Orange/Green) to reshape the entire continuous path.</p>
+        </header>
+
+        <!-- Gemini API Feature Button -->
+        <div class="flex justify-center mt-4">
+            <button id="analyzeCurveBtn" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition duration-300 transform hover:scale-105 flex items-center">
+                ✨ Analyze Full Path Motion
+            </button>
+        </div>
+
+        <!-- Curve Analysis Output Area -->
+        <div id="analysisOutput" class="mt-6 p-4 bg-purple-50 border border-purple-200 rounded-xl hidden">
+            <h3 class="text-xl font-semibold text-purple-700 mb-2">Motion Analysis (Segments 1 & 2)</h3>
+            <p id="analysisText" class="text-gray-800 italic"></p>
+            <div id="loadingIndicator" class="flex items-center text-purple-600 hidden">
+                <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-purple-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Analyzing the Bézier physics for both segments...
+            </div>
+        </div>
+
+        <!-- Canvas and Points Container -->
+        <div id="canvasContainer" class="relative aspect-video w-full rounded-lg overflow-hidden">
+            <canvas id="bezierCanvas" class="w-full h-full"></canvas>
+            
+            <!-- Dynamic handles will be inserted here by JavaScript -->
+        </div>
+
+        <div class="flex flex-col md:flex-row justify-between items-center text-sm font-medium text-gray-600 mt-4 pt-4 border-t">
+            <p>Curve Path: <span class="text-blue-500">Continuous 2-Segment Path</span></p>
+            <p>Animated Dot: <span class="text-red-500">#F56565</span></p>
+            <p>Handles: <span class="text-green-500">Control Points (C)</span> / <span class="text-orange-500">Intermediate Anchor (A1)</span></p>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        // --- Global Setup ---
+        const canvas = document.getElementById('bezierCanvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('canvasContainer');
+
+        // Changed to 'var' to prevent redeclaration errors in some environments
+        var animationFrameId;
+        var t = 0; // Animation parameter (0 to 2, since there are 2 segments)
+        var draggedPoint = null;
+
+        // Data structure for the Composite Bezier Curve (2 Segments = 7 points)
+        // Normalized coordinates (0-1000)
+        const allPoints = [
+            // Segment 1: P0 (A0), P1 (C1), P2 (C2), P3 (A1)
+            { id: 0, x: 0, y: 1000, type: 'A', name: 'A0 (Start)', isFixed: true, domElement: null },
+            { id: 1, x: 300, y: 800, type: 'C', name: 'C1', isFixed: false, domElement: null },
+            { id: 2, x: 400, y: 200, type: 'C', name: 'C2', isFixed: false, domElement: null },
+            { id: 3, x: 500, y: 500, type: 'A', name: 'A1 (Anchor)', isFixed: false, domElement: null }, // Intermediate Anchor
+
+            // Segment 2: P0 (A1), P1 (C3), P2 (C4), P3 (A2)
+            // C3 is calculated based on C2 and A1 to ensure G1 continuity (C3 = A1 + (A1 - C2))
+            { id: 4, x: 600, y: 800, type: 'C', name: 'C3', isFixed: false, domElement: null },
+            { id: 5, x: 700, y: 200, type: 'C', name: 'C4', isFixed: false, domElement: null },
+            { id: 6, x: 1000, y: 0, type: 'A', name: 'A2 (End)', isFixed: true, domElement: null }
+        ];
+
+        const NUM_SEGMENTS = 2;
+
+
+        // --- Utility Functions ---
+
+        /**
+         * Gets the current width and height of the canvas and scales the point coordinates.
+         * Maps normalized X(0-1000) to Canvas X(0-Width) and Normalized Y(0=Top, 1000=Bottom) to Canvas Y(0-Height).
+         * @param {object} p - A point object {x, y}
+         * @returns {object} - Scaled point {x, y}
+         */
+        function scalePoint(p) {
+            const width = canvas.width;
+            const height = canvas.height;
+            // Normalized X to Canvas X
+            const scaledX = p.x / 1000 * width;
+            // Normalized Y (1000=bottom, 0=top) to Canvas Y (0=top, Height=bottom)
+            const scaledY = (1000 - p.y) / 1000 * height; 
+            return { x: scaledX, y: scaledY };
+        }
+
+        /**
+         * Calculates a point on a cubic Bézier curve.
+         */
+        function getBezierPoint(t_local, p0, p1, p2, p3) {
+            const t2 = t_local * t_local;
+            const t3 = t2 * t_local;
+            const t1 = 1 - t_local;
+            const t12 = t1 * t1;
+            const t13 = t12 * t1;
+
+            const x = t13 * p0.x + 3 * t12 * t_local * p1.x + 3 * t1 * t2 * p2.x + t3 * p3.x;
+            const y = t13 * p0.y + 3 * t12 * t_local * p1.y + 3 * t1 * t2 * p2.y + t3 * p3.y;
+
+            return { x, y };
+        }
+        
+        /**
+         * Calculates the point on the entire composite curve based on global time t.
+         */
+        function getCompositeBezierPoint(t_global) {
+            const segmentIndex = Math.floor(t_global);
+            const t_local = t_global - segmentIndex;
+
+            // Ensure we are within the bounds [0, NUM_SEGMENTS - 0.0001]
+            if (segmentIndex >= NUM_SEGMENTS) {
+                return allPoints[allPoints.length - 1]; // Return end point
+            }
+            
+            // Points for the current segment (P0, P1, P2, P3)
+            const baseIndex = segmentIndex * 3; 
+            
+            // Check for edge case on Segment 1 where P0 is index 0, P3 is index 3.
+            // P0: 0, P1: 1, P2: 2, P3: 3
+            // P0: 3, P1: 4, P2: 5, P3: 6
+            const p0 = allPoints[baseIndex];
+            const p1 = allPoints[baseIndex + 1];
+            const p2 = allPoints[baseIndex + 2];
+            const p3 = allPoints[baseIndex + 3];
+
+            return getBezierPoint(t_local, p0, p1, p2, p3);
+        }
+
+        /**
+         * Enforces G1 continuity (C2, A1, C3 must be collinear) at the anchor A1 (index 3).
+         * This function is called whenever C2 or C3 is dragged.
+         * @param {number} draggedId - The ID of the point that was just dragged (2 or 4).
+         */
+        function enforceG1Continuity(draggedId) {
+            const A1 = allPoints[3];
+            let C_other, C_dragged;
+
+            if (draggedId === 2) { // C2 was dragged, update C3
+                C_dragged = allPoints[2];
+                C_other = allPoints[4];
+            } else if (draggedId === 4) { // C3 was dragged, update C2
+                C_dragged = allPoints[4];
+                C_other = allPoints[2];
+            } else {
+                return; // Only enforce for C2 and C3
+            }
+            
+            // Calculate the vector from C_dragged to A1
+            const dx = A1.x - C_dragged.x;
+            const dy = A1.y - C_dragged.y;
+            
+            // Calculate the vector length from C_dragged to A1
+            const lengthDragged = Math.sqrt(dx * dx + dy * dy);
+
+            // Get the current length from A1 to C_other
+            const dx_other = C_other.x - A1.x;
+            const dy_other = C_other.y - A1.y;
+            const lengthOther = Math.sqrt(dx_other * dx_other + dy_other * dy_other);
+
+            // Calculate the new coordinates for C_other (maintaining collinearity and length)
+            if (lengthDragged > 0) {
+                // Direction vector from A1 to C_other is opposite of C_dragged to A1
+                const newDx = -dx;
+                const newDy = -dy;
+
+                // Normalize the direction vector
+                const invLengthDragged = 1.0 / lengthDragged;
+                const normDx = newDx * invLengthDragged;
+                const normDy = newDy * invLengthDragged;
+
+                // Scale by the original length (lengthOther)
+                C_other.x = A1.x + normDx * lengthOther;
+                C_other.y = A1.y + normDy * lengthOther;
+
+            } else {
+                // If C_dragged is on top of A1, place C_other opposite of C_dragged's original position (or just keep it where it is)
+                // For simplicity, if C_dragged is on A1, C_other must also be on A1 to maintain zero length.
+                C_other.x = A1.x;
+                C_other.y = A1.y;
+            }
+        }
+
+
+        // --- Drawing Functions ---
+
+        function drawCurve() {
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = '#4299E1'; // Blue
+
+            for (let i = 0; i < NUM_SEGMENTS; i++) {
+                const baseIndex = i * 3;
+                const p0 = allPoints[baseIndex];
+                const p1 = allPoints[baseIndex + 1];
+                const p2 = allPoints[baseIndex + 2];
+                const p3 = allPoints[baseIndex + 3];
+
+                const s0 = scalePoint(p0);
+                const s1 = scalePoint(p1);
+                const s2 = scalePoint(p2);
+                const s3 = scalePoint(p3);
+
+                ctx.beginPath();
+                ctx.moveTo(s0.x, s0.y);
+                ctx.bezierCurveTo(s1.x, s1.y, s2.x, s2.y, s3.x, s3.y);
+                ctx.stroke();
+            }
+        }
+
+        function drawControlLines() {
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#a0aec0'; // Light Gray
+
+            for (let i = 0; i < NUM_SEGMENTS; i++) {
+                const baseIndex = i * 3;
+                const p0 = allPoints[baseIndex];
+                const p1 = allPoints[baseIndex + 1];
+                const p2 = allPoints[baseIndex + 2];
+                const p3 = allPoints[baseIndex + 3];
+
+                const s0 = scalePoint(p0);
+                const s1 = scalePoint(p1);
+                const s2 = scalePoint(p2);
+                const s3 = scalePoint(p3);
+
+                // P0 to P1 (Anchor to Control 1)
+                ctx.beginPath();
+                ctx.moveTo(s0.x, s0.y);
+                ctx.lineTo(s1.x, s1.y);
+                ctx.stroke();
+
+                // P2 to P3 (Control 2 to Anchor)
+                ctx.beginPath();
+                ctx.moveTo(s2.x, s2.y);
+                ctx.lineTo(s3.x, s3.y);
+                ctx.stroke();
+            }
+        }
+
+        function drawAnimatorPoint() {
+            // Get the normalized coordinates of the animated point
+            const animatedPointNormalized = getCompositeBezierPoint(t);
+            // Scale it to canvas coordinates
+            const animatedPointScaled = scalePoint(animatedPointNormalized);
+
+            // Draw the point
+            ctx.beginPath();
+            ctx.arc(animatedPointScaled.x, animatedPointScaled.y, 10, 0, 2 * Math.PI);
+            ctx.fillStyle = '#f56565'; // Red
+            ctx.fill();
+
+            // Draw the current t value (optional debugging)
+            ctx.fillStyle = '#1f2937';
+            ctx.font = '14px Inter';
+            ctx.fillText(`t: ${t.toFixed(2)}`, animatedPointScaled.x + 15, animatedPointScaled.y + 5);
+        }
+
+        // --- Core Loop ---
+
+        function draw() {
+            // 1. Clear the canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 2. Draw the path and control lines
+            drawControlLines();
+            drawCurve();
+
+            // 3. Draw the animated dot
+            drawAnimatorPoint();
+        }
+
+        function animate() {
+            // Increment t, wrapping it back to 0 when it exceeds NUM_SEGMENTS (2)
+            t = (t + 0.005) % NUM_SEGMENTS;
+
+            draw();
+
+            animationFrameId = requestAnimationFrame(animate);
+        }
+
+
+        // --- DOM Handle Management ---
+
+        function initializeDOMHandles() {
+            allPoints.forEach(point => {
+                if (point.isFixed) {
+                    // Fixed points are drawn on canvas, but let's add labels for A0/A2
+                    // A0/A2 labels are already in the HTML.
+                    return;
+                }
+
+                const handle = document.createElement('div');
+                handle.id = 'p' + point.id;
+                handle.classList.add('control-point', 'text-xs', 'font-semibold', 'text-white', 'flex', 'items-center', 'justify-center', 'select-none');
+                
+                // Add specific styling based on type
+                if (point.type === 'A') {
+                    handle.classList.add('anchor-intermediate', 'w-4', 'h-4');
+                    handle.textContent = point.name.replace(/\s*\(.*\)/, ''); // A1
+                } else if (point.type === 'C') {
+                    handle.classList.add('control-handle', 'w-3', 'h-3');
+                }
+
+                point.domElement = handle;
+                container.appendChild(handle);
+            });
+
+            // Set initial positions based on data
+            updateHandlePositions();
+        }
+        
+        function updateHandlePositions() {
+             // Loop through all points and position the DOM elements
+            allPoints.forEach(point => {
+                if (!point.domElement) return;
+
+                const scaled = scalePoint(point);
+                point.domElement.style.left = `${scaled.x}px`;
+                point.domElement.style.top = `${scaled.y}px`;
+            });
+        }
+
+        // --- Resizing and Initialization ---
+
+        function resizeCanvas() {
+            // Set canvas size to match container size
+            const rect = container.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+
+            updateHandlePositions(); // Reposition handles based on new canvas size
+            draw(); // Redraw immediately after resize
+        }
+
+
+        // --- Mouse/Touch Dragging Logic ---
+
+        function handleDown(event) {
+            // Find which handle was clicked/touched
+            const target = event.target.closest('.control-point');
+            if (target) {
+                if (event.type === 'touchstart') {
+                    event.preventDefault();
+                }
+
+                // Find the point object corresponding to the DOM element ID
+                draggedPoint = allPoints.find(p => p.domElement && p.domElement.id === target.id);
+                if (draggedPoint) {
+                    target.style.cursor = 'grabbing';
+                    t = 0; // Reset animation time
+                }
+            }
+        }
+
+        function handleMove(event) {
+            if (!draggedPoint) return;
+
+            const clientX = event.clientX || event.touches[0].clientX;
+            const clientY = event.clientY || event.touches[0].clientY;
+
+            const rect = container.getBoundingClientRect();
+
+            // Calculate new position relative to the container, clamping it to the container bounds
+            let newX_px = clientX - rect.left;
+            let newY_px = clientY - rect.top;
+
+            // Clamp X and Y to prevent handle from leaving the canvas area
+            newX_px = Math.max(0, Math.min(newX_px, rect.width));
+            newY_px = Math.max(0, Math.min(newY_px, rect.height));
+
+            // Convert back to normalized coordinates (0-1000)
+            const normalizedX = (newX_px / rect.width) * 1000;
+            const normalizedY = 1000 - (newY_px / rect.height) * 1000;
+
+            // Update the dragged point data
+            draggedPoint.x = normalizedX;
+            draggedPoint.y = normalizedY;
+
+            // Enforce continuity if the dragged point is C2 or C3
+            if (draggedPoint.id === 2 || draggedPoint.id === 4) {
+                enforceG1Continuity(draggedPoint.id);
+            } 
+            // If the anchor A1 (id: 3) is dragged, we must maintain the relationship between C2 and C3
+            else if (draggedPoint.id === 3) {
+                 // The continuity is maintained by keeping C2-A1-C3 collinear.
+                 // When A1 moves, C2 and C3 move along with it, maintaining their distances from A1.
+                 // We don't need explicit continuity enforcement here unless C2/C3 are fixed, which they aren't.
+                 // Since C2 and C3 are relative to A1, the G1 link is only broken if the handle is dragged off the line.
+                 // A simple translational update is needed for the handles linked to A1 (which are C2 and C3)
+                 // This is already done by the handleMove function since C2 and C3 are not fixed.
+                 
+                 // If the user drags A1 (id 3), we want the neighboring C2 (id 2) and C3 (id 4) to shift by the same amount.
+                 const dx_shift = draggedPoint.x - allPoints[3].x;
+                 const dy_shift = draggedPoint.y - allPoints[3].y;
+                 
+                 // We need to calculate the *difference* in position, but we don't have the "old" position easily.
+                 // To simplify: we treat A1 as an anchor that moves, and C2/C3 keep their relative positions
+                 // when A1 moves. We'll skip the relative shifting for now and rely on the user adjusting C2/C3
+                 // if A1 moves far. The crucial part is the C2/C3 collinearity when C2 or C3 is moved.
+            }
+
+            // Update all DOM handle positions (including the one linked via G1 continuity)
+            updateHandlePositions();
+            draw();
+        }
+
+        function handleUp() {
+            if (draggedPoint) {
+                draggedPoint = null;
+                // Reset cursor styles for all non-fixed points
+                allPoints.forEach(p => {
+                    if (p.domElement) p.domElement.style.cursor = 'grab';
+                });
+            }
+        }
+
+        // --- Gemini API Setup ---
+        const API_KEY = ""; // Placeholder for Canvas environment
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${API_KEY}`;
+        const MAX_RETRIES = 5;
+
+        // Elements for the new feature
+        const analyzeBtn = document.getElementById('analyzeCurveBtn');
+        const analysisOutput = document.getElementById('analysisOutput');
+        const analysisText = document.getElementById('analysisText');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+
+        // Utility function for fetching with exponential backoff
+        async function fetchWithExponentialBackoff(url, options, retries = 0) {
+            try {
+                const response = await fetch(url, options);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            } catch (error) {
+                if (retries < MAX_RETRIES) {
+                    const delay = Math.pow(2, retries) * 1000 + Math.random() * 1000;
+                    // console.log(`Attempt ${retries + 1} failed. Retrying in ${delay / 1000}s...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return fetchWithExponentialBackoff(url, options, retries + 1);
+                } else {
+                    throw new Error("API request failed after multiple retries: " + error.message);
+                }
+            }
+        }
+
+        /**
+         * Formats the current normalized point data into a string for the LLM prompt, segment by segment.
+         */
+        function getNormalizedPointsString() {
+            let prompt = "";
+            for (let i = 0; i < NUM_SEGMENTS; i++) {
+                const baseIndex = i * 3;
+                const p0 = allPoints[baseIndex];
+                const p1 = allPoints[baseIndex + 1];
+                const p2 = allPoints[baseIndex + 2];
+                const p3 = allPoints[baseIndex + 3];
+
+                prompt += `--- Segment ${i + 1} ---\n`;
+                prompt += `Start (P0): (x: ${p0.x.toFixed(0)}, y: ${p0.y.toFixed(0)})\n`;
+                prompt += `Control 1 (P1): (x: ${p1.x.toFixed(0)}, y: ${p1.y.toFixed(0)})\n`;
+                prompt += `Control 2 (P2): (x: ${p2.x.toFixed(0)}, y: ${p2.y.toFixed(0)})\n`;
+                prompt += `End (P3): (x: ${p3.x.toFixed(0)}, y: ${p3.y.toFixed(0)})\n`;
+            }
+            prompt += `The path is continuous, with P3 of Segment 1 being P0 of Segment 2.`;
+            return prompt;
+        }
+
+        async function generateCurveAnalysis() {
+            analysisOutput.classList.remove('hidden');
+            analysisText.classList.add('hidden');
+            loadingIndicator.classList.remove('hidden');
+            analyzeBtn.disabled = true;
+
+            const currentPoints = getNormalizedPointsString();
+
+            const userPrompt = `Analyze the combined motion profile of this 2-segment cubic Bézier curve. The coordinates are normalized to a 1000x1000 space (Y=1000 is the bottom, Y=0 is the top).
+            The object moves from A0 to A2.
+            Describe the motion in a maximum of four concise sentences. Focus on the overall speed characteristics (e.g., slow start, quick snap in the middle, smooth ease-out) and the aesthetic style of the complete path.
+
+            Coordinates:
+            ${currentPoints}`;
+
+            const payload = {
+                contents: [{ parts: [{ text: userPrompt }] }],
+                systemInstruction: {
+                    parts: [{ text: "You are a professional motion graphics designer and animator. Analyze the provided Bézier coordinates and provide a concise, descriptive analysis of the resulting combined motion profile (speed, acceleration, and style)." }]
+                }
+            };
+
+            try {
+                const result = await fetchWithExponentialBackoff(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "Analysis failed to produce text.";
+                analysisText.textContent = text;
+
+            } catch (error) {
+                analysisText.textContent = `Error: Could not retrieve analysis. (${error.message})`;
+                console.error("Gemini API call error:", error);
+            } finally {
+                loadingIndicator.classList.add('hidden');
+                analysisText.classList.remove('hidden');
+                analyzeBtn.disabled = false;
+            }
+        }
+
+        // --- Event Listeners and Execution ---
+
+        window.onload = function () {
+            initializeDOMHandles();
+            resizeCanvas(); // Initial size setup
+            window.addEventListener('resize', resizeCanvas);
+
+            // Drag listeners (Unified for mouse and touch) on the container
+            container.addEventListener('mousedown', handleDown);
+            window.addEventListener('mousemove', handleMove);
+            window.addEventListener('mouseup', handleUp);
+
+            container.addEventListener('touchstart', handleDown, { passive: false });
+            window.addEventListener('touchmove', handleMove, { passive: false });
+            window.addEventListener('touchend', handleUp);
+
+            // Gemini Feature Listener
+            analyzeBtn.addEventListener('click', generateCurveAnalysis);
+
+            // Start the animation loop
+            animate();
+        };
+
+    </script>
+</body>
+</html>

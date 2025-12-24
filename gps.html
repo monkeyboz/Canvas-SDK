@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Brightness Row Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* Apply Inter font and basic styles */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7fafc;
+        }
+        /* Custom styles for canvas and overlay */
+        #imageContainer {
+            position: relative;
+            display: inline-block;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            border-radius: 0.5rem;
+        }
+        #imageCanvas {
+            border-radius: 0.5rem;
+            max-width: 100%;
+            height: auto;
+            display: block;
+        }
+        /* Hidden canvas for off-screen processing */
+        #processingCanvas {
+            display: none;
+        }
+        /* Styling the row indicator line */
+        #rowIndicator {
+            position: absolute;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background-color: #ef4444; /* Red line */
+            pointer-events: none; /* Allows clicks to pass through */
+            opacity: 0.75;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body class=" min-h-screen">
+
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6 border-b pb-2">
+            Image Brightness Row Analyzer
+        </h1>
+
+        <!-- File Upload Card -->
+        <div class="bg-white p-6 rounded-xl shadow-lg mb-8">
+            <label for="imageUpload" class="block text-sm font-medium text-gray-700 mb-2">
+                Step 1: Upload an Image
+            </label>
+            <input type="file" id="imageUpload" accept="image/*" class="w-full text-sm text-gray-500
+                file:mr-4 file:py-2 file:px-4
+                file:rounded-full file:border-0
+                file:text-sm file:font-semibold
+                file:bg-indigo-50 file:text-indigo-600
+                hover:file:bg-indigo-100 cursor-pointer"
+            >
+        </div>
+
+        <!-- Main Content Area -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+
+            <!-- Image Display Section -->
+            <div class="lg:col-span-1">
+                <h2 class="text-xl font-semibold text-gray-700 mb-4">
+                    Step 2: Original Image
+                </h2>
+                <div id="imageContainer" class="w-full">
+                    <!-- Canvas for displaying the image -->
+                    <canvas id="imageCanvas" class="w-full h-auto bg-gray-100"></canvas>
+                    <!-- Row indicator line -->
+                    <div id="rowIndicator" style="display: none;"></div>
+                </div>
+                <p id="imageStatus" class="mt-4 text-sm text-red-500 font-medium hidden">
+                    Please upload an image first.
+                </p>
+            </div>
+
+            <!-- Graph and Controls Section -->
+            <div class="lg:col-span-1">
+                <h2 class="text-xl font-semibold text-gray-700 mb-4">
+                    Step 3: Brightness Profile Graph
+                </h2>
+
+                <!-- Row Selector Control -->
+                <div id="rowControl" class="bg-white p-6 rounded-xl shadow-lg mb-6" style="display: none;">
+                    <label for="rowSlider" class="block text-sm font-medium text-gray-700 mb-2">
+                        Select Image Row: <span id="currentRowDisplay" class="font-bold text-indigo-600">0</span>
+                    </label>
+                    <input type="range" id="rowSlider" min="0" value="0"
+                           class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer range-lg"
+                           oninput="updateGraph()"
+                    >
+                    <p class="text-xs text-gray-500 mt-2">
+                        Drag the slider to choose the horizontal row of pixels to analyze.
+                    </p>
+                    <input type="range" id="rowZoomSlider" min="0" value="0"
+                           class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer range-lg"
+                           oninput="updateGraph()"
+                    >
+                </div>
+
+                <!-- Graph Display -->
+                <div class="bg-white rounded-xl shadow-lg" width="900px">
+                    <canvas id="graphCanvas" class="w-full h-full"></canvas>
+                </div>
+                <p class="mt-4 text-sm text-gray-600">
+                    The line graph shows the brightness (luminosity) of each pixel across the selected row, ranging from 0 (black) to 255 (white).
+                </p>
+            </div>
+        </div>
+
+        <!-- Hidden Canvas for Data Processing -->
+        <canvas id="processingCanvas"></canvas>
+    </div>
+
+    <script>
+        // --- Firebase Setup (Required Global Variables Check) ---
+        // Although this app doesn't require persistence, maintaining the Firebase structure
+        // is necessary for the single-file mandate context.
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        // Note: We don't need to initialize Firebase/Auth/Firestore as we are not persisting data.
+
+        // --- DOM Elements ---
+        const imageUpload = document.getElementById('imageUpload');
+        const imageCanvas = document.getElementById('imageCanvas');
+        const graphCanvas = document.getElementById('graphCanvas');
+        const processingCanvas = document.getElementById('processingCanvas');
+        const rowSlider = document.getElementById('rowSlider');
+        const currentRowDisplay = document.getElementById('currentRowDisplay');
+        const rowControl = document.getElementById('rowControl');
+        const rowIndicator = document.getElementById('rowIndicator');
+        const imageContainer = document.getElementById('imageContainer');
+        const imageStatus = document.getElementById('imageStatus');
+
+        const imageCtx = imageCanvas.getContext('2d');
+        const graphCtx = graphCanvas.getContext('2d');
+        const processingCtx = processingCanvas.getContext('2d');
+
+        let originalImage = null; // Stores the loaded image object
+
+        // Luminosity constants based on human perception
+        const R_LUMINANCE = 0.2126;
+        const G_LUMINANCE = 0.7152;
+        const B_LUMINANCE = 0.0722;
+
+        /**
+         * Converts RGB components to a single brightness value (0-255).
+         * Uses the standard perceived luminosity formula.
+         * @param {number} r Red value (0-255)
+         * @param {number} g Green value (0-255)
+         * @param {number} b Blue value (0-255)
+         * @returns {number} The luminosity value (0-255)
+         */
+        function getLuminosity(r, g, b) {
+            return Math.floor((R_LUMINANCE * r) + (G_LUMINANCE * g) + (B_LUMINANCE * b));
+        }
+
+        /**
+         * Draws the selected row indicator line on the displayed image.
+         */
+        function updateRowIndicator() {
+            if (!originalImage) return;
+
+            const selectedRow = parseInt(rowSlider.value, 10);
+            const imageHeight = imageCanvas.height;
+            const canvasHeight = imageContainer.offsetHeight;
+
+            // Calculate the position of the line relative to the canvas height
+            // We use the full image height for calculation, but map it to the displayed canvas height
+            const yPosition = (selectedRow / originalImage.height) * canvasHeight;
+
+            rowIndicator.style.top = `${yPosition}px`;
+            rowIndicator.style.display = 'block';
+        }
+
+        /**
+         * Analyzes the pixel data for the selected row and draws the brightness graph.
+         */
+        function updateGraph() {
+            if (!originalImage) {
+                // Should not happen if controls are hidden, but good for safety
+                imageStatus.textContent = "Please upload an image before trying to analyze.";
+                imageStatus.classList.remove('hidden');
+                return;
+            }
+
+            const selectedRow = parseInt(rowSlider.value, 10);
+            currentRowDisplay.textContent = selectedRow;
+
+            // Update row indicator position
+            updateRowIndicator();
+
+            const imgWidth = originalImage.width;
+            const imgHeight = originalImage.height;
+
+            // 1. Ensure the processing canvas is sized correctly
+            processingCanvas.width = imgWidth;
+            processingCanvas.height = imgHeight;
+            // Redraw the image on the off-screen canvas for fresh data
+            processingCtx.drawImage(originalImage, 0, 0, imgWidth, imgHeight);
+
+            // 2. Extract image data for the entire image
+            const imageData = processingCtx.getImageData(0, 0, imgWidth, imgHeight);
+            const data = imageData.data; // The 1D array of [R, G, B, A, R, G, B, A, ...]
+
+            const brightnessValues = [];
+
+            // The index of the first pixel of the selected row in the 1D array
+            const rowStartIndex = (selectedRow * imgWidth * 4); // 4 components per pixel (R, G, B, A)
+
+            // 3. Process the selected row
+            for (let x = 0; x < imgWidth; x++) {
+                const pixelIndex = rowStartIndex + (x * 4);
+                const r = data[pixelIndex];
+                const g = data[pixelIndex + 1];
+                const b = data[pixelIndex + 2];
+
+                brightnessValues.push(getLuminosity(r, g, b));
+            }
+
+            // 4. Draw the Graph
+            drawGraph(brightnessValues, imgWidth);
+        }
+
+        /**
+         * Draws the line graph for the given brightness values.
+         * @param {number[]} values Array of luminosity values (0-255).
+         * @param {number} width The number of pixels in the row (graph width).
+         */
+        function drawGraph(values, width) {
+            const canvasWidth = graphCanvas.offsetWidth;
+            const canvasHeight = graphCanvas.offsetHeight;
+            graphCanvas.width = canvasWidth;
+            graphCanvas.height = canvasHeight;
+
+            // Clear previous graph
+            graphCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+            const padding = 20;
+            const chartWidth = canvasWidth - 2 * padding;
+            const chartHeight = canvasHeight - 2 * padding;
+
+            if (values.length === 0) return;
+
+            // Scaling factors
+            const xStep = chartWidth / (width - 1);
+            // Y scale: 255 is max brightness. Max height is chartHeight.
+            const yScale = chartHeight / 255;
+
+            // --- Draw Axes and Labels (Optional, but informative) ---
+            graphCtx.strokeStyle = '#e5e7eb';
+            graphCtx.lineWidth = 1;
+
+            // X-Axis (Bottom)
+            graphCtx.beginPath();
+            graphCtx.moveTo(padding, padding + chartHeight);
+            graphCtx.lineTo(padding + chartWidth, padding + chartHeight);
+            graphCtx.stroke();
+
+            // Y-Axis (Left)
+            graphCtx.beginPath();
+            graphCtx.moveTo(padding, padding);
+            graphCtx.lineTo(padding, padding + chartHeight);
+            graphCtx.stroke();
+
+            graphCtx.fillStyle = '#6b7280';
+            graphCtx.font = '10px Inter';
+            // Y-axis labels
+            graphCtx.fillText('255 (Bright)', padding + 5, padding + 5);
+            graphCtx.fillText('0 (Dark)', padding + 5, padding + chartHeight - 5);
+            // X-axis labels
+            graphCtx.fillText('0', padding - 5, padding + chartHeight + 15);
+            graphCtx.fillText(width, padding + chartWidth - 15, padding + chartHeight + 15);
+
+            // --- Draw the Brightness Line ---
+            graphCtx.strokeStyle = '#4f46e5'; // Indigo
+            graphCtx.lineWidth = 2;
+            graphCtx.beginPath();
+
+            values.forEach((brightness, index) => {
+                // Map x index (0 to width-1) to canvas x position (padding to padding + chartWidth)
+                const x = padding + index * xStep;
+
+                // Map brightness (0 to 255) to canvas y position (padding + chartHeight to padding)
+                // 255 maps to the top (padding), 0 maps to the bottom (padding + chartHeight)
+                const y = padding + (chartHeight - brightness * yScale);
+
+                if (index === 0) {
+                    graphCtx.moveTo(x, y);
+                } else {
+                    graphCtx.lineTo(x, y);
+                }
+            });
+
+            graphCtx.stroke();
+        }
+
+        /**
+         * Main handler for image file selection.
+         */
+        function handleImageUpload(event) {
+            const file = event.target.files[0];
+            if (!file) {
+                originalImage = null;
+                rowControl.style.display = 'none';
+                imageStatus.classList.remove('hidden');
+                imageStatus.textContent = "No image selected. Please choose a file.";
+                return;
+            }
+
+            imageStatus.classList.add('hidden');
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    originalImage = img;
+
+                    // 1. Update Canvas Dimensions
+                    // Set both canvases to the native image dimensions for processing accuracy
+                    // For display, CSS handles scaling, but we set internal resolution here.
+                    imageCanvas.width = img.width;
+                    imageCanvas.height = img.height;
+
+                    // 2. Draw Image on Display Canvas
+                    imageCtx.drawImage(img, 0, 0, img.width, img.height);
+
+                    // 3. Update Row Controls
+                    rowSlider.max = img.height - 1; // Rows are 0-indexed
+                    rowSlider.value = Math.floor(img.height / 2); // Start near the center
+                    rowControl.style.display = 'block';
+
+                    // 4. Trigger Initial Analysis
+                    updateGraph();
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // --- Event Listeners ---
+        imageUpload.addEventListener('change', handleImageUpload);
+        rowSlider.addEventListener('input', updateGraph);
+
+        // Initial setup for empty canvas states
+        window.addEventListener('load', () => {
+            // Set initial state for graph canvas size based on its container
+            graphCanvas.width = graphCanvas.offsetWidth;
+            graphCanvas.height = graphCanvas.offsetHeight;
+
+            // Show initial status
+            imageStatus.classList.remove('hidden');
+            imageStatus.textContent = "Please upload an image to begin the analysis.";
+        });
+
+        // Handle window resize to keep the graph and indicator responsive
+        window.addEventListener('resize', () => {
+            if (originalImage) {
+                // Re-draw the graph to fit the new container size
+                updateGraph();
+                // Re-position the indicator based on the new display size
+                updateRowIndicator();
+            }
+        });
+    </script>
+</body>
+</html>

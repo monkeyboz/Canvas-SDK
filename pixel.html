@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Pixel Convergence Studio — LIVE Worker Heatmap (v3)</title>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+  :root { --bg:#0d1117; --panel:#0f1720; --accent:#58a6ff; --muted:#8b949e; --card:#161b22; }
+  html,body{height:100%;margin:0;background:var(--bg);color:#c9d1d9;font-family:Inter,Arial,Helvetica,sans-serif}
+  .wrap{max-width:1200px;margin:18px auto;padding:18px 18px 120px 18px} /* bottom padding to allow sticky timeline */
+  h1{color:var(--accent);margin:0 0 8px}
+  .controls{background:var(--panel);padding:14px;border-radius:12px;display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  label{font-size:13px;color:var(--muted);display:inline-flex;gap:8px;align-items:center}
+  input[type="number"]{width:80px;padding:6px;border-radius:6px;border:1px solid #22303a;background:#0b1116;color:#ddd}
+  button{padding:8px 12px;border-radius:8px;border:0;background:#238636;color:white;font-weight:600;cursor:pointer}
+  button.secondary{background:#2d6f9a}
+  .panel{background:linear-gradient(180deg,#071018 0%, #0c131a 100%);padding:10px;border-radius:12px;border:1px solid #16202a}
+  canvas{image-rendering:pixelated;border-radius:8px;border:2px solid #24303a;box-shadow:0 6px 20px rgba(0,0,0,.6);display:block}
+  .preview{width:100%;max-width:540px}
+  .thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .thumb{width:64px;height:64px;border:1px solid #27323a;border-radius:8px;overflow:hidden;cursor:pointer;position:relative}
+  .thumb img{width:100%;height:100%;object-fit:cover;image-rendering:pixelated}
+  .thumb .sel{position:absolute;right:4px;top:4px;background:rgba(0,0,0,.5);padding:2px 6px;border-radius:6px;font-size:11px}
+  .status{font-weight:700;color:var(--accent)}
+  .inspector{display:flex;gap:12px;margin-top:12px}
+  .inspector .col{flex:1}
+  .sim-list{max-height:180px;overflow:auto;font-family:monospace;font-size:13px}
+  .sim-list div{padding:6px;border-bottom:1px solid rgba(255,255,255,.03);display:flex;justify-content:space-between;align-items:center}
+  .controls-right{margin-left:auto;display:flex;gap:8px}
+  .muted{color:var(--muted);font-size:13px}
+  .tiny{font-size:12px;color:var(--muted)}
+  @media (max-width:880px){ .inspector{flex-direction:column} .controls{flex-direction:column;align-items:stretch} }
+
+  /* NEW: timeline / step-blocks */
+  #heatmapDock { position: sticky; bottom: 18px; z-index: 60; margin-top:18px; }
+  #heatmapContainer {
+    width: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
+    padding: 12px;
+    background:#071018;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+  }
+  #heatmapTimeline { display:inline-block; height: 120px; padding-bottom:6px; }
+  .step-block {
+    width: 47px;
+    height: 80px;
+    display: inline-block;
+    border-radius: 6px;
+    margin-right: 6px;
+    cursor: pointer;
+    box-sizing: border-box;
+    border: 1px solid #2b3640;
+    transition: transform .12s ease, outline .12s;
+    vertical-align: bottom;
+    position: relative;
+  }
+  .step-block:hover { transform: translateY(-6px) scale(1.03); }
+  .step-block.selected { outline: 3px solid var(--accent); transform: translateY(-8px) scale(1.05); }
+  .step-block .label {
+    position: absolute; bottom: -18px; left: 0; right:0; text-align:center; font-size:11px; color:#cbd5e1;
+  }
+  .heat-tooltip {
+    position:absolute; pointer-events:none; background:rgba(0,0,0,0.75); color:#fff; padding:6px 8px; border-radius:6px; font-size:12px; z-index:2000;
+    transform: translate(-50%, -110%);
+  }
+
+  /* Heatmap preview panel */
+  #heatmapPreview { margin-top:10px; display:none; }
+  #heatmapPreview .meta { font-size:13px; color:var(--muted); margin-bottom:8px; }
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Pixel Convergence Studio – LIVE Worker Heatmap (v3)</h1>
+
+  <div class="controls panel" role="region" aria-label="controls">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input type="file" id="imageInput" accept="image/*" multiple>
+      <input type="file" id="pcaInput" accept=".pca">
+      <label><input type="checkbox" id="grayscaleCheck"> Grayscale</label>
+      <label><input type="checkbox" id="ditherCheck"> Dither</label>
+    </div>
+
+    <div style="display:flex;gap:8px;align-items:center">
+      <label>Start <input type="number" id="startBlockSize" value="64"></label>
+      <label>End <input type="number" id="finalBlockSize" value="1"></label>
+      <label>Step <input type="number" id="stepSize" value="4"></label>
+      <label>Delay(ms) <input type="number" id="delayMs" value="100"></label>
+    </div>
+
+    <div class="controls-right">
+      <label>Workers <input type="number" id="workerCount" value="0" style="width:70px"></label>
+      <button id="go">Generate (Live)</button>
+      <button id="stop" class="secondary" disabled>Stop</button>
+      <button id="morph" style="display:none">Play Morph</button>
+      <button id="downloadPCA" style="display:none">Download .pca</button>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:12px;margin-top:12px;align-items:flex-start">
+    <div style="flex:1" class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:4px 0;color:var(--accent)">Convergence</h2>
+        <div class="status" id="status">Ready — upload images</div>
+      </div>
+
+      <canvas id="display" class="preview" width="512" height="512" style="width:100%;height:auto;border-radius:8px;"></canvas>
+      <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+        <div class="muted">Source</div>
+        <div id="srcLabel" class="tiny" style="min-width:70px">—</div>
+        <div class="muted">Target</div>
+        <div id="tgtLabel" class="tiny" style="min-width:70px">—</div>
+        <button id="simMorphBtn" style="margin-left:auto">Similarity Morph</button>
+      </div>
+
+      <div class="thumbs panel" id="thumbs" aria-label="thumbnails" style="margin-top:8px;"></div>
+
+      <!-- Step inspector & diff preview -->
+      <div class="panel" id="heatmapPreview">
+        <h3 style="margin:4px 0;color:var(--accent)">Step Details</h3>
+        <div id="heatmapInfo" class="meta">Block: — | Similarity: —</div>
+        <div style="display:flex;gap:12px">
+          <div style="flex:1">
+            <div class="sim-list" id="simList"></div>
+          </div>
+          <div style="width:260px">
+            <div style="display:flex;gap:8px;align-items:center">
+              <button id="diffBtn">Show Diff (overlay)</button>
+              <button id="predictBtn" class="secondary">Predict Final</button>
+            </div>
+            <canvas id="diffCanvas" width="512" height="512" style="width:100%;height:auto;margin-top:8px;border-radius:6px;border:1px solid rgba(255,255,255,.04)"></canvas>
+            <div id="predictOut" class="tiny muted" style="margin-top:8px">Prediction: —</div>
+            <div style="margin-top:6px">
+              <label class="tiny muted">Morph frames <input id="morphFrames" type="number" value="36" style="width:70px"></label>
+              <label class="tiny muted" style="margin-left:8px">Speed ms <input id="morphSpeed" type="number" value="14" style="width:70px"></label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div style="width:380px" class="panel">
+      <h2 style="margin:4px 0;color:var(--accent)">Activity Log</h2>
+      <div id="log" style="background:#071018;padding:10px;height:420px;overflow:auto;font-family:monospace;font-size:12px;border-radius:6px;color:#cbd5e1">Ready. Upload images and click Generate.</div>
+    </div>
+  </div>
+
+  <!-- Docked timeline pinned near bottom of content -->
+  <div id="heatmapDock">
+    <div id="heatmapContainer" class="panel">
+      <div id="heatmapTimeline" aria-label="heatmap timeline"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Inline worker script -->
+<script id="workerScript" type="javascript/text">
+self.onmessage = async (e) => {
+  try {
+    const {type, payload} = e.data;
+    if (type === 'PROCESS') {
+      const {images, options, blockSize} = payload;
+      const results = [];
+      for (const meta of images) {
+        const {index,width,height} = meta;
+        const src = new Uint8ClampedArray(meta.buffer);
+        const out = new Uint8ClampedArray(src.length);
+        const tmp = new Uint8ClampedArray(src.length);
+        tmp.set(src);
+
+        if (options.grayscale) {
+          for (let i=0;i<tmp.length;i+=4){
+            const r=tmp[i], g=tmp[i+1], b=tmp[i+2];
+            const l = Math.round(0.299*r + 0.587*g + 0.114*b);
+            tmp[i]=tmp[i+1]=tmp[i+2]=l;
+          }
+        }
+        if (options.dither && options.grayscale) {
+          for (let i=0;i<tmp.length;i+=4){
+            const v = tmp[i]>128?255:0;
+            tmp[i]=tmp[i+1]=tmp[i+2]=v;
+          }
+        }
+
+        const w = width, h = height, bs = blockSize;
+        for (let by=0; by<h; by+=bs) {
+          for (let bx=0; bx<w; bx+=bs) {
+            let rsum=0, gsum=0, bsum=0, cnt=0;
+            const byEnd = Math.min(by+bs, h);
+            const bxEnd = Math.min(bx+bs, w);
+            for (let yy=by; yy<byEnd; yy++) {
+              const rowBase = yy * w;
+              for (let xx=bx; xx<bxEnd; xx++) {
+                const idx = (rowBase + xx)*4;
+                rsum += tmp[idx]; gsum += tmp[idx+1]; bsum += tmp[idx+2];
+                cnt++;
+              }
+            }
+            const ravg = Math.round(rsum / cnt);
+            const gavg = Math.round(gsum / cnt);
+            const bavg = Math.round(bsum / cnt);
+            // fill block
+            for (let yy=by; yy<byEnd; yy++) {
+              const rowBase = yy * w;
+              for (let xx=bx; xx<bxEnd; xx++) {
+                const idx = (rowBase + xx)*4;
+                out[idx]=ravg; out[idx+1]=gavg; out[idx+2]=bavg; out[idx+3]=tmp[idx+3];
+              }
+            }
+          }
+        }
+        results.push({index, width, height, buffer: out.buffer});
+      }
+      const transfers = results.map(r=>r.buffer);
+      self.postMessage({type:'FRAME', blockSize, results}, transfers);
+    }
+  } catch (err) {
+    self.postMessage({type:'ERROR', message:String(err)});
+  }
+};
+</script>
+
+<script>
+/* ================== MAIN THREAD ================== */
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const log = (msg) => {
+  const line = document.createElement('div');
+  const ts = new Date().toLocaleTimeString();
+  line.textContent = `[${ts}] ${msg}`;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+  console.log(msg);
+};
+
+let images = []; // {index,width,height,buffer,thumbUrl}
+let stepData = {}; // blockSize -> [{index,imageData}]
+let convergenceData = []; // [{block, sims:[{index,sim}], avg}]
+let workers = [];
+let processing = false;
+let finalFramesByIndex = {};
+let currentPreviewIndex = 0;
+let srcIndex = null, tgtIndex = null;
+let lastClickedBlock = null;
+let workerCount = 0;
+
+// Elements
+const displayCanvas = document.getElementById('display');
+const displayCtx = displayCanvas.getContext('2d', {alpha:true});
+displayCtx.fillStyle = '#000'; displayCtx.fillRect(0,0,512,512);
+
+const thumbsEl = document.getElementById('thumbs');
+const simListEl = document.getElementById('simList');
+const inspectorEl = document.getElementById('heatmapPreview');
+const diffCanvas = document.getElementById('diffCanvas');
+const diffCtx = diffCanvas.getContext('2d');
+const predictOut = document.getElementById('predictOut');
+const heatmapTimeline = document.getElementById('heatmapTimeline');
+const heatmapContainer = document.getElementById('heatmapContainer');
+
+function buildWorkerBlobUrl(){ return URL.createObjectURL(new Blob([document.getElementById('workerScript').textContent], {type:'application/javascript'})); }
+function createWorkers(count){
+  terminateWorkers();
+  const url = buildWorkerBlobUrl();
+  workers = [];
+  for (let i=0;i<count;i++){
+    const w = new Worker(url);
+    w.onmessage = handleWorkerMessage;
+    w.onerror = (e) => log('Worker error: '+e.message);
+    workers.push(w);
+  }
+  log(`Worker pool created: ${count}`);
+}
+function terminateWorkers(){ for(const w of workers) w.terminate(); workers = []; }
+
+function handleWorkerMessage(e){
+  const data = e.data;
+  if (data.type === 'FRAME'){
+    const {blockSize, results} = data;
+    if (!stepData[blockSize]) stepData[blockSize]=[];
+    for (const r of results){
+      const imgData = new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height);
+      stepData[blockSize].push({index:r.index, imageData: imgData});
+      if (blockSize === 1) finalFramesByIndex[r.index] = imgData;
+    }
+    log(`Received block ${blockSize} frames: ${results.length}`);
+    updateConvergenceAndDraw();
+  } else if (data.type === 'ERROR') {
+    log('Worker error: '+data.message);
+  }
+}
+
+// Upload images
+document.getElementById('imageInput').onchange = async (e) => {
+  images = []; stepData = {}; convergenceData = []; finalFramesByIndex = {};
+  thumbsEl.innerHTML = ''; inspectorEl.style.display='none';
+  const files = Array.from(e.target.files).slice(0,20);
+  if (files.length === 0) return;
+  for (let i=0;i<files.length;i++){
+    const f = files[i];
+    const dataUrl = await fileToDataURL(f);
+    const img = await createImageBitmapFromDataURL(dataUrl);
+    const c = document.createElement('canvas'); c.width=512; c.height=512;
+    const ctx = c.getContext('2d'); ctx.fillStyle='#000'; ctx.fillRect(0,0,512,512);
+    // cover draw
+    const ar = img.width/img.height;
+    let dw=512, dh=512, dx=0, dy=0;
+    if (ar>1){ dh=512; dw=Math.round(512*ar); dx=Math.round((512-dw)/2); } else { dw=512; dh=Math.round(512/ar); dy=Math.round((512-dh)/2); }
+    ctx.drawImage(img, dx, dy, dw, dh);
+    const id = ctx.getImageData(0,0,512,512);
+    images.push({index:i,width:512,height:512,buffer:id.data.buffer,thumbUrl:dataUrl});
+    const t = document.createElement('div'); t.className='thumb';
+    const im = document.createElement('img'); im.src = dataUrl;
+    const badge = document.createElement('div'); badge.className='sel'; badge.textContent='—';
+    t.appendChild(im); t.appendChild(badge);
+    t.onclick = () => {
+      // toggle selection states: none->src->tgt->none
+      if (srcIndex === null) { srcIndex = i; badge.textContent = 'SRC'; document.getElementById('srcLabel').textContent = `#${i}`; }
+      else if (srcIndex === i && tgtIndex === null) { srcIndex = null; badge.textContent = '—'; document.getElementById('srcLabel').textContent = '—'; }
+      else if (tgtIndex === null && srcIndex !== i) { tgtIndex = i; badge.textContent = 'TGT'; document.getElementById('tgtLabel').textContent = `#${i}`; }
+      else if (tgtIndex === i) { tgtIndex = null; badge.textContent = '—'; document.getElementById('tgtLabel').textContent = '—'; }
+      else {
+        // replace src if both set
+        if (srcIndex !== null && tgtIndex !== null) {
+          const badges = thumbsEl.querySelectorAll('.thumb .sel');
+          badges.forEach(b=>b.textContent='—');
+          srcIndex = i; tgtIndex = null;
+          badge.textContent='SRC'; document.getElementById('srcLabel').textContent = `#${i}`; document.getElementById('tgtLabel').textContent='—';
+        }
+      }
+      refreshThumbBadges();
+      currentPreviewIndex = i; drawPreviewFromLatest(i);
+    };
+    thumbsEl.appendChild(t);
+    log(`Loaded ${f.name}`);
+  }
+  statusEl.textContent = `Loaded ${images.length} image(s). Ready.`;
+  refreshThumbBadges();
+};
+
+function refreshThumbBadges(){
+  const nodes = thumbsEl.querySelectorAll('.thumb');
+  nodes.forEach((n, idx) => {
+    const b = n.querySelector('.sel');
+    if (srcIndex === idx) b.textContent = 'SRC';
+    else if (tgtIndex === idx) b.textContent = 'TGT';
+    else b.textContent = '—';
+  });
+}
+
+function fileToDataURL(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }
+function createImageBitmapFromDataURL(dataUrl){ return fetch(dataUrl).then(r=>r.blob()).then(b=>createImageBitmap(b)); }
+
+// Start processing
+document.getElementById('go').onclick = async () => {
+  if (images.length === 0) return alert('Upload images first.');
+  if (processing) return alert('Already processing.');
+  stepData = {}; convergenceData = {}; finalFramesByIndex = {};
+  const start = Math.max(1, parseInt(document.getElementById('startBlockSize').value)||64);
+  const end = Math.max(1, parseInt(document.getElementById('finalBlockSize').value)||1);
+  const step = Math.max(1, parseInt(document.getElementById('stepSize').value)||4);
+  const delayMs = Math.max(0, parseInt(document.getElementById('delayMs').value)||100);
+  let wcount = parseInt(document.getElementById('workerCount').value)||0;
+  if (wcount <= 0) wcount = Math.max(1, (navigator.hardwareConcurrency||4)-1);
+  workerCount = Math.min(wcount, Math.max(1, images.length));
+  createWorkers(workerCount);
+  processing = true;
+  document.getElementById('stop').disabled = false;
+  document.getElementById('go').disabled = true;
+  document.getElementById('morph').style.display = 'none';
+  document.getElementById('downloadPCA').style.display = 'none';
+  statusEl.textContent = 'Processing...';
+  log(`Start processing blocks ${start}→${end}, step ${step}, delay ${delayMs}ms, workers ${workerCount}`);
+
+  const blockSizes = [];
+  for (let b = start; b >= end; b -= step) blockSizes.push(b);
+  if (!blockSizes.includes(1)) blockSizes.push(1);
+
+  for (const blockSize of blockSizes) {
+    if (!processing) break;
+    // distribute images to workers
+    const chunks = []; for (let i=0;i<workerCount;i++) chunks.push([]);
+    images.forEach((img, idx) => chunks[idx % workerCount].push(img));
+    for (let wi=0; wi<workerCount; wi++){
+      const chunk = chunks[wi];
+      if (chunk.length===0) continue;
+      const imgsToSend = chunk.map(c => ({index:c.index,width:c.width,height:c.height,buffer:c.buffer.slice(0)}));
+      workers[wi].postMessage({type:'PROCESS', payload:{images:imgsToSend, options:{grayscale:document.getElementById('grayscaleCheck').checked, dither:document.getElementById('ditherCheck').checked}, blockSize}}, imgsToSend.map(i=>i.buffer));
+    }
+    await new Promise(r=>setTimeout(r, delayMs));
+  }
+
+  // Wait for final frames or timeout
+  const startWait = Date.now();
+  while (processing){
+    const allGot = images.every(img => finalFramesByIndex.hasOwnProperty(img.index));
+    if (allGot) break;
+    if (Date.now() - startWait > 30000) break;
+    await new Promise(r=>setTimeout(r,120));
+  }
+
+  processing = false;
+  document.getElementById('stop').disabled = true;
+  document.getElementById('go').disabled = false;
+  document.getElementById('morph').style.display = 'inline-block';
+  document.getElementById('downloadPCA').style.display = 'inline-block';
+  statusEl.textContent = 'Complete — frames ready';
+  log('Processing completed or timed out. Final frames may continue to arrive briefly.');
+};
+
+// Stop
+document.getElementById('stop').onclick = () => {
+  processing = false;
+  terminateWorkers();
+  document.getElementById('stop').disabled = true;
+  document.getElementById('go').disabled = false;
+  statusEl.textContent = 'Processing stopped';
+  log('User stopped processing.');
+};
+
+// Update convergence and draw timeline/preview
+function updateConvergenceAndDraw(){
+  const blocks = Object.keys(stepData).map(k=>parseInt(k)).sort((a,b)=>b-a);
+  convergenceData = [];
+  for (const b of blocks){
+    const frames = stepData[b];
+    const sims = frames.map(f => {
+      const idx = f.index;
+      if (!finalFramesByIndex[idx]) return {index:idx, sim:null};
+      const sim = calculateSimilarity(f.imageData.data, finalFramesByIndex[idx].data);
+      return {index: idx, sim};
+    });
+    const vals = sims.filter(s=>s.sim!==null).map(s=>s.sim);
+    const avg = vals.length ? (vals.reduce((a,b)=>a+b,0)/vals.length) : null;
+    convergenceData.push({block:b, sims, avg});
+  }
+  drawHeatmapTimeline();
+  drawPreviewFromLatest(currentPreviewIndex);
+}
+
+// NEW: drawHeatmapTimeline() — creates fixed-width clickable step buttons
+function drawHeatmapTimeline(){
+  heatmapTimeline.innerHTML = '';
+  if (convergenceData.length === 0) return;
+  convergenceData.forEach((d, i) => {
+    const div = document.createElement('div');
+    div.className = 'step-block';
+    const hue = d.avg === null ? 200 : Math.max(0, Math.min(140, Math.round(d.avg * 1.2)));
+    div.style.background = d.avg === null ? '#444' : `hsl(${hue},70%,45%)`;
+    div.dataset.index = i;
+    div.dataset.block = d.block;
+    div.title = `Block: ${d.block}px\nSimilarity: ${d.avg === null ? '–' : d.avg.toFixed(1) + '%'}\nClick to inspect`;
+    // label
+    const lbl = document.createElement('div'); lbl.className='label'; lbl.textContent = d.block + 'px';
+    div.appendChild(lbl);
+
+    // click -> inspect
+    div.addEventListener('click', (ev) => {
+      const idx = parseInt(div.dataset.index);
+      highlightStep(idx);
+      const step = convergenceData[idx];
+      lastClickedBlock = step.block;
+      showHeatmapDetails(step);
+      // scroll into view centered
+      const containerRect = heatmapContainer.getBoundingClientRect();
+      const elRect = div.getBoundingClientRect();
+      const offset = (elRect.left + elRect.right)/2 - (containerRect.left + containerRect.right)/2;
+      heatmapContainer.scrollLeft += offset;
+    });
+
+    // tooltip on hover (small custom tooltip)
+    div.addEventListener('mouseenter', (ev) => {
+      const tt = document.createElement('div'); tt.className='heat-tooltip';
+      tt.id = 'heatTooltip';
+      const text = `Block: ${d.block}px\nSimilarity: ${d.avg === null ? '–' : d.avg.toFixed(1)+'%'}`;
+      tt.textContent = text;
+      document.body.appendChild(tt);
+      const r = div.getBoundingClientRect();
+      tt.style.left = (r.left + r.width/2) + 'px';
+      tt.style.top = (r.top) + 'px';
+    });
+    div.addEventListener('mouseleave', (ev) => {
+      const tt = document.getElementById('heatTooltip'); if (tt) tt.remove();
+    });
+
+    heatmapTimeline.appendChild(div);
+  });
+}
+
+// highlight a step-block by index
+function highlightStep(i){
+  const blocks = heatmapTimeline.querySelectorAll('.step-block');
+  blocks.forEach(b => b.classList.remove('selected'));
+  const sel = heatmapTimeline.querySelector(`.step-block[data-index="${i}"]`);
+  if (sel) sel.classList.add('selected');
+}
+
+// Show inspector details and draw diff overlay
+function showHeatmapDetails(step){
+  inspectorEl.style.display = 'block';
+  document.getElementById('heatmapInfo').textContent = `Block: ${step.block}px | Similarity: ${step.avg === null ? '–' : step.avg.toFixed(1) + '%'}`;
+  populateInspector(step);
+  // draw diff overlay for the first image (or current preview)
+  const chosenIndex = currentPreviewIndex !== undefined ? currentPreviewIndex : (step.sims[0] ? step.sims[0].index : 0);
+  drawDiffOverlay(chosenIndex, step.block);
+}
+
+// populate list of per-image similarities in inspector
+function populateInspector(step){
+  simListEl.innerHTML = '';
+  const sorted = step.sims.slice().sort((a,b) => {
+    const va = a.sim === null ? -1 : a.sim; const vb = b.sim === null ? -1 : b.sim; return vb - va;
+  });
+  sorted.forEach(s => {
+    const row = document.createElement('div');
+    const left = document.createElement('div'); left.textContent = `#${s.index}`;
+    const right = document.createElement('div'); right.style.display='flex'; right.style.gap='6px'; right.style.alignItems='center';
+    const simText = document.createElement('div'); simText.textContent = s.sim === null ? '–' : s.sim.toFixed(1)+'%';
+    const diffBtn = document.createElement('button'); diffBtn.textContent='Diff';
+    diffBtn.onclick = () => drawDiffOverlay(s.index, step.block);
+    const pickBtn = document.createElement('button'); pickBtn.textContent='Preview';
+    pickBtn.onclick = () => { currentPreviewIndex = s.index; drawPreviewFromLatest(s.index); };
+    right.appendChild(simText); right.appendChild(diffBtn); right.appendChild(pickBtn);
+    row.appendChild(left); row.appendChild(right);
+    row.style.display='flex'; row.style.justifyContent='space-between'; row.style.alignItems='center';
+    simListEl.appendChild(row);
+  });
+}
+
+// Draw diff overlay between a step frame (imageIndex @ block) and the final frame (method B: heatmap style)
+function drawDiffOverlay(imageIndex, block){
+  const arr = stepData[block] || [];
+  const frameObj = arr.find(x=>x.index===imageIndex);
+  const finalObj = finalFramesByIndex[imageIndex];
+  if (!frameObj) { alert('Selected frame not available for that block'); return; }
+  if (!finalObj) { alert('Final frame not yet available for that image'); return; }
+
+  const A = frameObj.imageData.data;
+  const B = finalObj.data;
+  const w = frameObj.imageData.width, h = frameObj.imageData.height;
+  diffCanvas.width = w; diffCanvas.height = h;
+  const out = new Uint8ClampedArray(A.length);
+
+  // produce green->red overlay: green = small diff, red = large diff
+  // compute diff per pixel (0..765), normalize to 0..255
+  for (let i=0;i<A.length;i+=4){
+    const dr = Math.abs(A[i] - B[i]);
+    const dg = Math.abs(A[i+1] - B[i+1]);
+    const db = Math.abs(A[i+2] - B[i+2]);
+    const diff = dr + dg + db; // 0..765
+    const n = Math.min(255, Math.round(diff / 3)); // map to 0..255 (approx)
+    // map n to color: 0 => green (0,255,0); 255 => red (255,0,0)
+    const r = n;
+    const g = 255 - n;
+    const b = 0;
+    // use alpha to show intensity but keep fully opaque for clarity
+    out[i] = r; out[i+1] = g; out[i+2] = b; out[i+3] = 255;
+  }
+  diffCtx.putImageData(new ImageData(out, w, h), 0, 0);
+  document.getElementById('predictOut').textContent = `Diff overlay for image #${imageIndex} @ ${block}px`;
+}
+
+// Prediction: linear reg of avg similarity vs block (coarse->fine)
+document.getElementById('predictBtn').onclick = () => {
+  if (convergenceData.length < 2) { predictOut.textContent = 'Not enough data to predict.'; return; }
+  const pts = convergenceData.filter(d=>d.avg !== null).map(d=>({x: d.block, y: d.avg}));
+  if (pts.length < 2) { predictOut.textContent = 'Not enough sims to predict.'; return; }
+  const n = pts.length;
+  let sumx=0,sumy=0,sumxy=0,sumxx=0;
+  for (const p of pts){ sumx += p.x; sumy += p.y; sumxy += p.x*p.y; sumxx += p.x*p.x; }
+  const denom = n*sumxx - sumx*sumx;
+  const a = denom === 0 ? 0 : (n*sumxy - sumx*sumy)/denom;
+  const b = (sumy - a*sumx)/n;
+  const pred = a*1 + b;
+  predictOut.textContent = `Linear prediction for block=1: ${Math.max(0, Math.min(100, pred)).toFixed(2)}% (y=${a.toFixed(4)}x+${b.toFixed(2)})`;
+};
+
+// Draw preview for image index using finest available block for that image
+function drawPreviewFromLatest(imageIndex){
+  currentPreviewIndex = imageIndex;
+  const blocks = Object.keys(stepData).map(k=>parseInt(k)).sort((a,b)=>a-b); // fine→coarse
+  for (const b of blocks){
+    const arr = stepData[b] || [];
+    const found = arr.find(x=>x.index===imageIndex);
+    if (found){
+      displayCtx.putImageData(found.imageData, 0, 0);
+      statusEl.textContent = `Preview: image ${imageIndex} (block ${b})`;
+      return;
+    }
+  }
+  // fallback show original
+  const meta = images.find(x=>x.index===imageIndex);
+  if (meta){
+    const id = new ImageData(new Uint8ClampedArray(meta.buffer), meta.width, meta.height);
+    displayCtx.putImageData(id,0,0);
+    statusEl.textContent = `Preview: original image ${imageIndex}`;
+  }
+}
+
+// Similarity morph button (morph between selected SRC/TGT)
+document.getElementById('simMorphBtn').onclick = () => {
+  if (srcIndex === null || tgtIndex === null) return alert('Select Source and Target images first (click thumbnails).');
+  const block = lastClickedBlock || (Object.keys(stepData).length ? Object.keys(stepData).map(k=>parseInt(k)).sort((a,b)=>a-b)[0] : 1);
+  const arr = stepData[block] || [];
+  const src = arr.find(x=>x.index===srcIndex) || stepData[1]?.find(x=>x.index===srcIndex) || null;
+  const tgt = arr.find(x=>x.index===tgtIndex) || stepData[1]?.find(x=>x.index===tgtIndex) || null;
+  if (!src || !tgt) return alert('Frames for selected images are not available at this step yet.');
+  const frames = parseInt(document.getElementById('morphFrames').value) || 36;
+  const speed = parseInt(document.getElementById('morphSpeed').value) || 14;
+  similarityMorph(src.imageData, tgt.imageData, frames, speed);
+};
+
+// Morphing function (linear cross-fade)
+async function similarityMorph(aImg, bImg, frames=36, speed=14){
+  const w = aImg.width, h = aImg.height;
+  const A = aImg.data, B = bImg.data;
+  for (let f=0; f<=frames; f++){
+    const alpha = f/frames;
+    const out = new ImageData(w,h);
+    for (let i=0;i<A.length;i+=4){
+      out.data[i] = Math.round(A[i] * (1-alpha) + B[i] * alpha);
+      out.data[i+1] = Math.round(A[i+1] * (1-alpha) + B[i+1] * alpha);
+      out.data[i+2] = Math.round(A[i+2] * (1-alpha) + B[i+2] * alpha);
+      out.data[i+3] = 255;
+    }
+    displayCtx.putImageData(out, 0, 0);
+    await new Promise(r=>setTimeout(r, speed));
+  }
+  statusEl.textContent = `Morph complete (src #${srcIndex} → tgt #${tgtIndex})`;
+}
+
+// Similarity calculation (pixel arrays)
+function calculateSimilarity(da, db){
+  let diff = 0;
+  for (let i=0;i<da.length;i+=4){
+    diff += Math.abs(da[i]-db[i]) + Math.abs(da[i+1]-db[i+1]) + Math.abs(da[i+2]-db[i+2]);
+  }
+  const max = (da.length/4) * 765;
+  return (1 - diff / max) * 100;
+}
+
+// PCA export (frames)
+document.getElementById('downloadPCA').onclick = async () => {
+  const zip = new JSZip();
+  const framesFolder = zip.folder('frames');
+  const blocks = Object.keys(stepData).map(k=>parseInt(k)).sort((a,b)=>b-a);
+  for (const b of blocks){
+    const arr = stepData[b];
+    for (const f of arr){
+      const c = document.createElement('canvas'); c.width=f.imageData.width; c.height=f.imageData.height;
+      const ctx = c.getContext('2d'); ctx.putImageData(f.imageData,0,0);
+      const blob = await new Promise(res => c.toBlob(res,'image/png'));
+      const simObj = convergenceData.find(cd=>cd.block===b);
+      const avg = simObj && simObj.avg !== null ? simObj.avg.toFixed(1) : 'na';
+      const filename = `${String(b).padStart(3,'0')}_img${f.index}_${avg}.png`;
+      const buf = await blob.arrayBuffer();
+      framesFolder.file(filename, buf);
+    }
+  }
+  zip.file('manifest.json', JSON.stringify({version:2, convergence:convergenceData}, null, 2));
+  const blob = await zip.generateAsync({type:'blob'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'pixel_convergence_live_v3.pca'; a.click();
+};
+
+// On page unload
+window.addEventListener('beforeunload', () => { terminateWorkers(); });
+
+// Initialize defaults
+document.getElementById('workerCount').value = 0; // auto
+document.getElementById('morph').onclick = () => {
+  alert('Use the "Similarity Morph" button in the Preview panel to morph between selected images (click thumbnails to set SRC/TGT).');
+};
+
+</script>
+</body>
+</html>

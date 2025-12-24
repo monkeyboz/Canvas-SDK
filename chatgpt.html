@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interactive Scanline Comparison</title>
+<style>
+  body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f0f0f0; }
+  canvas { border: 1px solid #333; margin: 10px 0; display: block; }
+  input { margin: 5px; }
+</style>
+</head>
+<body>
+
+<h2>Interactive Scanline Comparison</h2>
+
+<input type="file" id="imageLoader" accept="image/*"><br>
+
+<h3>Single Scanline</h3>
+<label>Scanline Y-position:</label>
+<input type="range" id="scanline" min="0" max="100" value="50"><br>
+
+<h3>Comparison Settings</h3>
+<label>Start Row:</label>
+<input type="range" id="startRow" min="0" max="100" value="0"><br>
+<label>Row Range Length:</label>
+<input type="number" id="rowLength" value="10" min="1"><br>
+<label>Row Step (fidelity):</label>
+<input type="number" id="rowStep" value="1" min="1"><br>
+
+<canvas id="imageCanvas" width="500" height="300"></canvas>
+<canvas id="graphCanvas" width="500" height="150"></canvas>
+<canvas id="heightCanvas" width="500" height="150"></canvas>
+<canvas id="pixelCanvas" width="500" height="50"></canvas>
+<canvas id="comparisonCanvas" width="500" height="200"></canvas>
+<canvas id="3dcanvas" widtb="500" height="500"></canvas>
+
+<script>
+const imageLoader = document.getElementById('imageLoader');
+const scanlineInput = document.getElementById('scanline');
+const startRowInput = document.getElementById('startRow');
+const rowLengthInput = document.getElementById('rowLength');
+const rowStepInput = document.getElementById('rowStep');
+
+const imageCanvas = document.getElementById('imageCanvas');
+const graphCanvas = document.getElementById('graphCanvas');
+const heightCanvas = document.getElementById('heightCanvas');
+const pixelCanvas = document.getElementById('pixelCanvas');
+const comparisonCanvas = document.getElementById('comparisonCanvas');
+const dcanvas = document.getElementById("3dcanvas");
+
+const imageCtx = imageCanvas.getContext('2d');
+const graphCtx = graphCanvas.getContext('2d');
+const heightCtx = heightCanvas.getContext('2d');
+const pixelCtx = pixelCanvas.getContext('2d');
+const comparisonCtx = comparisonCanvas.getContext('2d');
+const dctx = dcanvas.getContext("2d");
+
+let img = new Image();
+
+imageLoader.addEventListener('change', handleImage, false);
+scanlineInput.addEventListener('input', drawScanlineGraph);
+startRowInput.addEventListener('input', drawComparisonGraph);
+rowLengthInput.addEventListener('input', drawComparisonGraph);
+rowStepInput.addEventListener('input', drawComparisonGraph);
+
+function handleImage(e){
+    const reader = new FileReader();
+    reader.onload = function(event){
+        img.onload = function(){
+            // Adjust canvas widths to image width
+            const canvases = [imageCanvas, graphCanvas, heightCanvas, pixelCanvas, comparisonCanvas];
+            canvases.forEach(c => c.width = img.width);
+            imageCanvas.height = img.height;
+
+            imageCtx.drawImage(img, 0, 0);
+            scanlineInput.max = img.height - 1;
+            startRowInput.max = img.height - 1;
+
+            drawScanlineGraph();
+            drawComparisonGraph();
+        }
+        img.src = event.target.result;
+    }
+    reader.readAsDataURL(e.target.files[0]);     
+}
+
+function getScanline(y){
+    const scanlineData = imageCtx.getImageData(0, y, imageCanvas.width, 1).data;
+    const intensities = [];
+    for(let x = 0; x < scanlineData.length; x += 4){
+        const r = scanlineData[x];
+        const g = scanlineData[x+1];
+        const b = scanlineData[x+2];
+        intensities.push(0.299*r + 0.587*g + 0.114*b);
+    }
+    return intensities;
+}
+
+// Draw single scanline with peaks/height/pixels
+function drawScanlineGraph(){
+    if(!img.src) return;
+
+    imageCtx.drawImage(img, 0, 0);
+
+    const y = parseInt(scanlineInput.value);
+    imageCtx.strokeStyle = 'red';
+    imageCtx.beginPath();
+    imageCtx.moveTo(0, y);
+    imageCtx.lineTo(imageCanvas.width, y);
+    imageCtx.stroke();
+
+    const intensities = getScanline(y);
+
+    // Intensity graph
+    graphCtx.clearRect(0, 0, graphCanvas.width, graphCanvas.height);
+    graphCtx.beginPath();
+    graphCtx.strokeStyle = 'blue';
+    for(let i=0; i<intensities.length; i++){
+        const yGraph = graphCanvas.height - (intensities[i]/255 * graphCanvas.height);
+        if(i===0) graphCtx.moveTo(i, yGraph); else graphCtx.lineTo(i, yGraph);
+    }
+    graphCtx.stroke();
+
+    // Height map
+    const heightMap = new Array(intensities.length).fill(0);
+    const radius = 3;
+    graphCtx.fillStyle = 'red';
+    for(let i=1; i<intensities.length-1; i++){
+        if(intensities[i] > intensities[i-1] && intensities[i] > intensities[i+1] ||
+           intensities[i] < intensities[i-1] && intensities[i] < intensities[i+1]){
+            const start = Math.max(0,i-radius);
+            const end = Math.min(intensities.length-1,i+radius);
+            let sum=0, count=0;
+            for(let j=start;j<=end;j++){ if(j!==i){sum+=intensities[j];count++;} }
+            const baseline=sum/count;
+            const height = Math.abs(intensities[i]-baseline);
+            heightMap[i] = height;
+
+            // Highlight peaks/valleys
+            graphCtx.beginPath();
+            const yGraph = graphCanvas.height - (intensities[i]/255 * graphCanvas.height);
+            graphCtx.arc(i, yGraph, 3, 0, Math.PI*2);
+            graphCtx.fill();
+        }
+    }
+
+    heightCtx.clearRect(0,0,heightCanvas.width,heightCanvas.height);
+    heightCtx.beginPath();
+    heightCtx.strokeStyle = 'green';
+    for(let i=0;i<heightMap.length;i++){
+        const yHeight = heightCanvas.height - (heightMap[i]/255 * heightCanvas.height*2);
+        if(i===0) heightCtx.moveTo(i,yHeight); else heightCtx.lineTo(i,yHeight);
+    }
+    heightCtx.stroke();
+
+    // Pixel graph
+    /*pixelCtx.clearRect(0,0,pixelCanvas.width,pixelCanvas.height);
+    for(let i=0;i<intensities.length;i++){
+        pixelCtx.fillStyle = `rgb(${intensities[i]},${intensities[i]},${intensities[i]})`;
+        pixelCtx.fillRect(i,0,1,pixelCanvas.height);
+    }*/
+}
+
+// Draw comparison graph for a range of rows
+function drawComparisonGraph(){
+    if(!img.src) return;
+
+    const startRow = parseInt(startRowInput.value);
+    const rowLength = parseInt(rowLengthInput.value);
+    const step = parseInt(rowStepInput.value);
+    const endRow = Math.min(img.height-1, startRow + rowLength);
+
+    // Draw scanlines on image
+    imageCtx.drawImage(img, 0, 0);
+    imageCtx.strokeStyle = 'yellow';
+    for(let y=startRow; y<=endRow; y+=step){
+        imageCtx.beginPath();
+        imageCtx.moveTo(0,y);
+        imageCtx.lineTo(imageCanvas.width,y);
+        imageCtx.stroke();
+    }
+
+    // Plot comparison graph
+    comparisonCtx.clearRect(0,0,comparisonCanvas.width,comparisonCanvas.height);
+    pixelCtx.clearRect(0,0,pixelCanvas.width,pixelCanvas.height);
+    pixelCanvas.height = rowLength;
+      dcanvas.width = pixelCanvas.width;
+      dcanvas.height = pixelCanvas.height;
+    const colors = ['red','blue','green','orange','purple','cyan','magenta'];
+    let colorIndex=0;
+    for(let y=startRow; y<=endRow; y+=step){
+        const intensities = getScanline(y);
+        comparisonCtx.beginPath();
+        comparisonCtx.strokeStyle = colors[colorIndex % colors.length];
+        for(let i=0;i<intensities.length;i++){
+            const yGraph = comparisonCanvas.height - (intensities[i]/255 * comparisonCanvas.height);
+            if(i===0) comparisonCtx.moveTo(i,yGraph); else comparisonCtx.lineTo(i,yGraph);
+            pixelCtx.fillStyle = `rgb(${intensities[i]},${intensities[i]},${intensities[i]})`;
+            pixelCtx.fillRect(i,y-startRow,1,step);
+          dctx.fillStyle = 'rgba(0,0,0,'+(255/intensities[i])+')'
+          dctx.fillRect(i,yGraph+(y-startRow),1,1);
+        }
+        comparisonCtx.stroke();
+        colorIndex++;
+    }
+}
+
+// Ensure dynamic end row updates
+startRowInput.addEventListener('input', ()=>{
+    const rowLength = parseInt(rowLengthInput.value);
+    const maxEnd = Math.min(img.height-1, parseInt(startRowInput.value)+rowLength);
+    drawComparisonGraph();
+});
+
+rowLengthInput.addEventListener('input', drawComparisonGraph);
+rowStepInput.addEventListener('input', drawComparisonGraph);
+scanlineInput.addEventListener('input', drawScanlineGraph);
+
+</script>
+</body>
+</html>
