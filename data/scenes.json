@@ -1,0 +1,208 @@
+{
+  "loading": {
+    "name": "loading",
+    "objs": [
+      {
+        "type": "fillText",
+        "attr": ["loading...", 150, 90],
+        "action": "onComplete:loadComplete"
+      }
+    ]
+  },
+  "compareImages": {
+    "name": "compare_images",
+    "objs": [
+      {
+        "template": "grid"
+      }
+    ]
+  },
+  "playerHand":{
+    "name":"Player Hand",
+    "objs":[
+    {"template":"cardGrid",
+    "info":[
+        {"name":"fighter1",
+        "description":"works with something",
+        "image":0}
+    ]}
+    ]
+  },
+  "map":{
+      "name":"map",
+      "objs":[
+          {
+              "template":"button",
+              "attr":[5,270,100,40],
+              "info":{"title":"testing"},
+              "fillStyle":"rgba(0,0,0,0.3)"
+          },
+          {
+              "type":"fillRect",
+              "attr":[45,72,30,30],
+              "action":"changeScreen",
+              "mainOption":"cards"
+          },
+          {
+              "type":"fillText",
+              "text":"this story begins several years before the end",
+              "attr":["this story happened and then began",10,300],
+              "fillStyle":"#ffffff"
+          }
+      ]
+  },
+  "cards": {
+    "name": "companies",
+    "audio": [
+      "1.mp3"
+    ],
+    "images": [
+      "1.jpg",
+      "2.jpg",
+      "3.jpg",
+      "4.jpg",
+      "5.jpg",
+      "grok.jpg",
+      "monkey.jpg"
+    ],
+    "objs": [
+      {
+        "template": "card",
+        "attr": [0,0,250,250],
+        "info": {"image":5,"title":"Image 1","description":"jibsy"},
+        "action": "changeScreen",
+        "mainOption":"main",
+        "animation": "template:fadeIn"
+      },
+      {
+        "template": "card",
+        "attr": [260,0,250,250],
+        "info": {"image":4,"title":"Image 3","description":"jibsy"},
+        "action": "changeScreen",
+        "mainOption":"map",
+        "animation": "template:fadeIn"
+      },
+       {
+        "template": "card",
+        "attr": [520,0,250,250],
+        "info": {"image":3,"title":"Image 2","description":"jibsy"},
+        "action": "changeScreen",
+        "mainOption":"main",
+        "animation": "template:fadeIn"
+      }
+    ]
+  },
+  "main": {
+    "name": "main",
+    "images": [
+      "test.jpg"
+    ],
+    "objs": [
+      {
+        "template": "button",
+        "attr": [0, 10],
+        "info":{"title":"start"},
+        "action": "changeScreen",
+        "mainOption":"cards"
+      },
+      {
+        "template": "button",
+        "attr": [300, 10,20,20],
+        "info":{"title":"options"},
+        "action": "changeScreen",
+        "mainOption":"map"
+      },
+      {
+        "template": "button",
+        "attr": [120, 10],
+        "info":{"title":"map"},
+        "action": "changeScreen",
+        "mainOption":"map"
+      }
+    ]
+  },
+  "info": {
+    "name": "info",
+    "objs": [
+      {
+        "template": "companyInfo",
+        "attr": [0, 50],
+        "text": "testing",
+        "src": 0
+      }
+    ]
+  },
+  "templates": {
+    "fadeIn": [
+      {
+        "fadein": "2s"
+      },
+      {
+        "hold": "5s"
+      },
+      {
+        "fadeout": "2s"
+      }
+    ],
+    "image":{
+        "type": "drawImage",
+          "attr": [0, 0, 0, 0],
+          "src": "img"
+    },
+    "text":{
+        "type": "fillText",
+        "text": "text",
+        "font": "20px Arial",
+        "fillStyle":"#ffffff",
+        "attr": [0,0]
+    },
+    "button":{
+        "objs":{
+            "button":{
+                "type":"fillRect",
+                "attr":[0,0,100,40]
+            },
+            "title":{
+                "template":"text",
+                "attr":[0,60]
+            }
+        }
+    },
+    "card": {
+      "objs": {
+       "image":{
+          "template":"image",
+          "attr":[0,0]
+        },
+        "title":{
+          "template":"text",
+          "fillStyle":"#000000",
+          "attr":[10,20]
+        },
+        "description":{
+          "template":"text",
+          "font":"12px Arial",
+          "fillStyle":"#ffffff",
+          "attr":[10,35]
+        }
+      }
+    },
+    "map":{
+        "background":{
+            "template":"image",
+            "info":{
+                "src":"img",
+                "dimensions":"dimensions",
+                "compressed":true
+            }
+        }
+    },
+    "grid": {
+      "template": "template",
+      "size": [0, 0]
+    },
+    "cardGrid":{
+      "template":"card"
+    }
+  }
+}

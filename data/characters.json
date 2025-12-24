@@ -1,0 +1,73 @@
+{
+  "stats": {
+    "hp": 100,
+    "strength": 100,
+    "evade": 100,
+    "crit": 100
+  },
+  "types": { 
+    "fighter": {
+      "hp": 10,
+      "strength": 50,
+      "evade": 10,
+      "crit": 10
+    },
+    "mage": {
+      "hp": -10,
+      "strength": 40,
+      "evade": 20,
+      "crit": 20
+    },
+    "vision": {
+      "hp": -50,
+      "strength": -20,
+      "evade": 100,
+      "crit": 60
+    }
+  },
+  "scale": {
+    "R": {
+      "all": 0
+    },
+    "S": {
+      "all": 30,
+      "merge": 5
+    },
+    "SR": {
+      "all": 40,
+      "merge": 10
+    },
+    "SSR": {
+      "all": 70,
+      "merge": 50
+    },
+    "X": {
+      "all": 100,
+      "merge": 100
+    },
+    "3X": {
+      "all": 1000,
+      "merge":500
+    }
+  },
+  "characters": {
+    "f1": {
+      "type": "fighter",
+      "name": "Jas",
+      "bio": "Really puts in work",
+      "birth": "Washington, D.C."
+    },
+    "f2": {
+      "type": "mage",
+      "name": "Smyth",
+      "bio": "Definitely the wizard type",
+      "birth": "Cincinati, OH (but really chicago)"
+    },
+    "f3": {
+      "type": "vision",
+      "name": "Vision",
+      "bio": "Plays alot, but really is that",
+      "birth": "Deleted his own birth place"
+    }
+  }
+}
